@@ -1,0 +1,58 @@
+{
+  "name": "tigercat",
+  "version": "0.1.0",
+  "description": "A Super-agent router for coding agents: one resident ACP router that dispatches work to Claude Code, Codex, or any ACP agent.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tornado1110/tigercat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tornado1110/tigercat/issues"
+  },
+  "homepage": "https://github.com/tornado1110/tigercat#readme",
+  "bin": {
+    "tigercat": "./bin/tigercat.js",
+    "tgc": "./bin/tgc.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "bin",
+    "examples",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "lint": "eslint src test",
+    "test": "npm run build && vitest run",
+    "test:tck": "node scripts/acp-tck.mjs"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "2.7.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "smol-toml": "1.9.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.21",
+    "eslint": "9.39.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.48.1",
+    "vitest": "4.0.8"
+  }
+}
