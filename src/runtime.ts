@@ -201,12 +201,6 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
       .connect(stream);
 
     const timeoutMs = this.options.handshakeTimeoutMs ?? 8_000;
-    const fail = (error: unknown): never => {
-      killProcess(proc);
-      connection.close();
-      const message = error instanceof Error ? error.message : String(error);
-      throw new TigerError("bad_runtime", `${runtime.name}: ${message}${stderr ? ` (${stderr.trim()})` : ""}`);
-    };
 
     try {
       const init = await withTimeout(
@@ -242,7 +236,18 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
       );
       return new ProcessHandle(proc, connection, session, updates, ctx.onExit);
     } catch (error) {
-      return fail(error);
+      let killMessage = "";
+      try {
+        await terminateProcess(proc);
+      } catch (killError) {
+        killMessage = killError instanceof Error ? ` (kill: ${killError.message})` : "";
+      }
+      connection.close();
+      const message = error instanceof Error ? error.message : String(error);
+      throw new TigerError(
+        "bad_runtime",
+        `${runtime.name}: ${message}${killMessage}${stderr ? ` (${stderr.trim()})` : ""}`,
+      );
     }
   }
 }
@@ -306,12 +311,21 @@ class ProcessHandle implements RuntimeHandle {
 
   async kill(): Promise<void> {
     this.suppressExit = true;
-    killProcess(this.proc);
-    this.connection.close();
+    let failure: unknown;
+    try {
+      await terminateProcess(this.proc);
+    } catch (error) {
+      failure = error;
+    } finally {
+      this.connection.close();
+    }
     if (!this.exited) {
       this.promptReject?.(new TigerError("killed", "runtime killed"));
     }
     await waitForExit(this.proc);
+    if (failure) {
+      throw failure instanceof Error ? failure : new TigerError("killed", String(failure));
+    }
   }
 }
 
@@ -337,19 +351,24 @@ function toUpdate(update: acp.SessionUpdate): RuntimeUpdate {
   return { sessionUpdate: update.sessionUpdate };
 }
 
-function killProcess(proc: ChildProcess): void {
+async function terminateProcess(proc: ChildProcess): Promise<void> {
   const pid = proc.pid;
-  if (!pid) return;
   try {
     if (process.platform === "win32") {
-      killWindowsTree(pid);
-    } else {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        proc.kill("SIGKILL");
-      }
+      if (pid) await reapWindowsTree(pid);
+    } else if (pid) {
+      killPosix(pid, proc);
     }
+  } finally {
+    for (const stream of [proc.stdin, proc.stdout, proc.stderr]) {
+      stream?.destroy();
+    }
+  }
+}
+
+function killPosix(pid: number, proc: ChildProcess): void {
+  try {
+    process.kill(-pid, "SIGKILL");
   } catch {
     try {
       proc.kill("SIGKILL");
@@ -357,26 +376,159 @@ function killProcess(proc: ChildProcess): void {
       // already gone
     }
   }
-  for (const stream of [proc.stdin, proc.stdout, proc.stderr]) {
-    stream?.destroy();
+}
+
+const WINDOWS_REAP_TIMEOUT_MS = 20_000;
+const WINDOWS_CONFIRM_TIMEOUT_MS = 5_000;
+
+/**
+ * Collect descendants while the parent is still alive, then taskkill /T /F.
+ * A single WMI snapshot can miss a child; killing the parent first reparents
+ * that child and the PID is lost. Issue #28.
+ */
+const WINDOWS_REAP_SCRIPT = `
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+$root = [int]$env:TIGERCAT_KILL_ROOT
+if ($root -le 0) { exit 2 }
+$deadline = (Get-Date).AddSeconds(12)
+$seen = New-Object 'System.Collections.Generic.HashSet[int]'
+$stable = 0
+function Get-Kids([int[]]$roots) {
+  $procs = @(Get-CimInstance Win32_Process)
+  $byParent = @{}
+  foreach ($p in $procs) {
+    $id = 0
+    $parent = 0
+    try { $id = [int]$p.ProcessId; $parent = [int]$p.ParentProcessId } catch { continue }
+    if ($id -le 0) { continue }
+    if (-not $byParent.ContainsKey($parent)) {
+      $byParent[$parent] = New-Object 'System.Collections.Generic.List[int]'
+    }
+    [void]$byParent[$parent].Add($id)
+  }
+  $found = New-Object 'System.Collections.Generic.List[int]'
+  $stack = New-Object 'System.Collections.Generic.Stack[int]'
+  $visited = New-Object 'System.Collections.Generic.HashSet[int]'
+  foreach ($item in $roots) { if ($item -gt 0) { $stack.Push([int]$item) } }
+  while ($stack.Count -gt 0) {
+    $id = [int]$stack.Pop()
+    if (-not $byParent.ContainsKey($id)) { continue }
+    foreach ($child in @($byParent[$id])) {
+      if ($child -le 0 -or $child -eq $root) { continue }
+      if ($visited.Add([int]$child)) {
+        [void]$found.Add([int]$child)
+        $stack.Push([int]$child)
+      }
+    }
+  }
+  return ,$found
+}
+function Stop-Tree([int]$id) {
+  if ($id -le 0) { return }
+  & taskkill.exe /PID $id /T /F 1>$null 2>$null | Out-Null
+}
+function Test-Live([int]$id) {
+  if ($id -le 0) { return $false }
+  return $null -ne (Get-Process -Id $id -ErrorAction SilentlyContinue)
+}
+while ((Get-Date) -lt $deadline) {
+  $roots = New-Object 'System.Collections.Generic.List[int]'
+  [void]$roots.Add($root)
+  foreach ($id in @($seen)) { [void]$roots.Add([int]$id) }
+  $found = @(Get-Kids $roots.ToArray())
+  $added = $false
+  foreach ($id in $found) {
+    if ($id -gt 0 -and $id -ne $root -and $seen.Add([int]$id)) { $added = $true }
+  }
+  foreach ($id in @($seen)) { Stop-Tree ([int]$id) }
+  $anyLive = $false
+  foreach ($id in @($seen)) { if (Test-Live ([int]$id)) { $anyLive = $true } }
+  if ($added -or $anyLive) { $stable = 0 } else { $stable++ }
+  $need = 2
+  if ($seen.Count -eq 0) { $need = 4 }
+  if ($stable -ge $need) {
+    Stop-Tree $root
+    break
+  }
+  Start-Sleep -Milliseconds 200
+}
+Stop-Tree $root
+$ids = New-Object 'System.Collections.Generic.List[int]'
+[void]$ids.Add($root)
+foreach ($id in @($seen)) { [void]$ids.Add([int]$id) }
+$confirm = (Get-Date).AddSeconds(4)
+do {
+  $live = New-Object 'System.Collections.Generic.List[int]'
+  foreach ($id in @($ids)) {
+    if (Test-Live ([int]$id)) { Stop-Tree ([int]$id); [void]$live.Add([int]$id) }
+  }
+  if ($live.Count -eq 0) { break }
+  Start-Sleep -Milliseconds 100
+} while ((Get-Date) -lt $confirm)
+Write-Output ($ids -join ',')
+exit 0
+`;
+
+async function reapWindowsTree(root: number): Promise<void> {
+  let stdout = "";
+  try {
+    stdout = execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", "-"],
+      {
+        input: WINDOWS_REAP_SCRIPT,
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: WINDOWS_REAP_TIMEOUT_MS,
+        env: { ...process.env, TIGERCAT_KILL_ROOT: String(root) },
+      },
+    );
+  } catch (error) {
+    const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr ?? "") : "";
+    const message = error instanceof Error ? error.message : String(error);
+    throw new TigerError("killed", `windows process tree kill failed for ${root}: ${message}${stderr ? ` (${stderr.trim()})` : ""}`);
+  }
+  const pids = new Set<number>([root]);
+  for (const match of stdout.matchAll(/\d+/g)) {
+    const pid = Number(match[0]);
+    if (pid > 0) pids.add(pid);
+  }
+  const deadline = Date.now() + WINDOWS_CONFIRM_TIMEOUT_MS;
+  let survivors = [...pids];
+  while (Date.now() < deadline) {
+    survivors = [...pids].filter((pid) => pidAlive(pid));
+    if (survivors.length === 0) return;
+    for (const pid of survivors) taskKillTree(pid);
+    await delay(100);
+  }
+  throw new TigerError("killed", `windows process tree still alive: ${survivors.join(",")}`);
+}
+
+function taskKillTree(pid: number): void {
+  try {
+    execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+      timeout: 10_000,
+    });
+  } catch {
+    // already gone, or still exiting; the poll decides
   }
 }
 
-function killWindowsTree(pid: number): void {
-  // taskkill /T can terminate the parent before its children and orphan them.
-  // Those orphans keep the worker directory locked. Kill descendants first.
-  const command = [
-    "function Kill-Tree([int]$id) {",
-    "  Get-CimInstance Win32_Process -Filter \"ParentProcessId=$id\" | ForEach-Object { Kill-Tree $_.ProcessId }",
-    "  & taskkill.exe /PID $id /F | Out-Null",
-    "}",
-    `Kill-Tree ${pid}`,
-  ].join(" ");
-  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
-    stdio: "ignore",
-    windowsHide: true,
-    timeout: 20_000,
-  });
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    return code === "EPERM";
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function waitForExit(proc: ChildProcess): Promise<void> {

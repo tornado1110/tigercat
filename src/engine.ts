@@ -503,7 +503,7 @@ export class Engine {
     if (session.state === "killed") return { status: "killed", idempotent: true };
     const live = this.live.get(id);
     if (live) live.suppressExit = true;
-    await live?.handle?.kill().catch(() => undefined);
+    await live?.handle?.kill();
     if (live?.stall) this.clock.clearTimeout(live.stall);
     if (live?.grace) this.clock.clearTimeout(live.grace);
     await this.transition(id, "killed");
