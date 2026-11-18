@@ -1,0 +1,104 @@
+name: Release
+
+# Release Please opens the release pull request from Conventional Commits.
+# Merging it creates the tag and GitHub Release. Publishing runs in this same
+# workflow: a release created with GITHUB_TOKEN does not start another workflow.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Detect package.json
+        id: package
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "package.json is not in the repository yet; skipping Release Please."
+          fi
+
+      - name: Release Please
+        id: release
+        if: steps.package.outputs.present == 'true'
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    name: Publish to npm
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true' && github.repository == 'tornado1110/tigercat'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # Trusted publishing needs Node >= 22.14 and npm CLI >= 11.5.1.
+          # The "22" spec selects the current Node 22 release on the runner.
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          # npm's trusted-publishing guide: do not cache release builds.
+          package-manager-cache: false
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build --if-present
+
+      # The release pull request is opened by GITHUB_TOKEN, so CI does not
+      # run on it. Test the tree that is about to be published.
+      - name: Test
+        run: npm test --if-present
+
+      - name: Publish to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NPM_TOKEN}" ]; then
+            # Fallback when trusted publishing is not configured.
+            # GitHub masks NPM_TOKEN in logs. Do not print it.
+            export NODE_AUTH_TOKEN="${NPM_TOKEN}"
+          fi
+          npm publish --provenance --access public

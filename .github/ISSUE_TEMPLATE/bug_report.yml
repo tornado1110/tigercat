@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a defect in TigerCat
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Remove API keys, tokens, and other secrets
+        before you submit. Security vulnerabilities belong in
+        [private reporting](https://github.com/tornado1110/tigercat/security/advisories/new),
+        not here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start TigerCat with ...
+        2. Dispatch a task to ...
+        3. See the error
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Operating system and version.
+      placeholder: Ubuntu 24.04, macOS 15, Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`.
+      placeholder: v22.13.0
+    validations:
+      required: true
+
+  - type: input
+    id: tigercat
+    attributes:
+      label: TigerCat version
+      description: Output of `tigercat --version`, or the git commit if you are not on a release.
+      placeholder: 0.0.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: runtimes
+    attributes:
+      label: ACP runtime(s)
+      description: Which ACP agents, editors, or clients were involved?
+      placeholder: Claude Code, Codex, cc-connect, botmux
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant logs, with secrets removed.
+      render: shell
+
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Secrets
+      options:
+        - label: I have removed API keys, tokens, and other secrets from this report.
+          required: true
