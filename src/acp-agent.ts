@@ -92,7 +92,32 @@ export async function serveUpstream(engine: Engine): Promise<void> {
       throw acp.RequestError.methodNotFound(ctx.method);
     })
     .connect(stream);
-  await connection.closed;
+
+  // acp-tck v0.4.0 kills a leftover agent with os.killpg, which does not
+  // exist on Windows. Exit ourselves when the client closes stdin, and
+  // drop MCP children first so they cannot keep the process alive.
+  await new Promise<void>((resolve) => {
+    let stopping = false;
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      resolve();
+      const force = setTimeout(() => process.exit(0), 500);
+      if (typeof force.unref === "function") force.unref();
+      void closeSessions(sessions).finally(() => process.exit(0));
+    };
+    process.stdin.once("end", stop);
+    process.stdin.once("close", stop);
+    void connection.closed.then(stop);
+  });
+}
+
+async function closeSessions(sessions: Map<string, UpstreamSession>): Promise<void> {
+  const closers: Array<Promise<unknown>> = [];
+  for (const session of sessions.values()) {
+    for (const client of session.mcp) closers.push(client.close().catch(() => undefined));
+  }
+  await Promise.all(closers);
 }
 
 async function connectProvidedMcp(servers: acp.McpServer[]): Promise<Client[]> {
