@@ -298,6 +298,7 @@ class ProcessHandle implements RuntimeHandle {
     if (!this.exited) {
       this.promptReject?.(new TigerError("killed", "runtime killed"));
     }
+    await waitForExit(this.proc);
   }
 }
 
@@ -339,6 +340,17 @@ function killProcess(proc: ChildProcess): void {
   } catch {
     // already gone
   }
+}
+
+function waitForExit(proc: ChildProcess): Promise<void> {
+  if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 2_000);
+    proc.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {

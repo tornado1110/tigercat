@@ -7,8 +7,22 @@ import { startStdioEngine, waitForEvent } from "../harness/stdio-engine.js";
 const roots: string[] = [];
 
 afterEach(async () => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) await removeTree(root);
 });
+
+async function removeTree(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  rmSync(dir, { recursive: true, force: true });
+}
 
 function alive(pid: number): boolean {
   try {
