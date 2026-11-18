@@ -160,6 +160,9 @@ describe("real stdio stub-agent", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     expect(released).toBe(true);
+    const session = await harness.engine.store.getSession(spawned.workerId);
+    expect(session?.pid).toBeTruthy();
+    expect(alive(session?.pid ?? 0)).toBe(false);
     await harness.engine.close();
     await harness.store.close();
   });

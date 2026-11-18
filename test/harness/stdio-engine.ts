@@ -12,7 +12,7 @@ export function stubRuntime(scenario: string, env: Record<string, string> = {}):
   return {
     name: scenario,
     command: process.execPath,
-    args: [path.resolve("node_modules/tsx/dist/cli.mjs"), path.resolve("test/stub-agent.ts")],
+    args: [path.resolve("test/stub-agent.ts")],
     env: { TIGERCAT_STUB_SCENARIO: scenario, ...env },
     tags: [],
     description: `stdio stub ${scenario}`,

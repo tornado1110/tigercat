@@ -329,7 +329,7 @@ function killProcess(proc: ChildProcess): void {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      killWindowsTree(pid);
     } else {
       try {
         process.kill(-pid, "SIGKILL");
@@ -338,8 +338,32 @@ function killProcess(proc: ChildProcess): void {
       }
     }
   } catch {
-    // already gone
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      // already gone
+    }
   }
+  for (const stream of [proc.stdin, proc.stdout, proc.stderr]) {
+    stream?.destroy();
+  }
+}
+
+function killWindowsTree(pid: number): void {
+  // taskkill /T can terminate the parent before its children and orphan them.
+  // Those orphans keep the worker directory locked. Kill descendants first.
+  const command = [
+    "function Kill-Tree([int]$id) {",
+    "  Get-CimInstance Win32_Process -Filter \"ParentProcessId=$id\" | ForEach-Object { Kill-Tree $_.ProcessId }",
+    "  & taskkill.exe /PID $id /F | Out-Null",
+    "}",
+    `Kill-Tree ${pid}`,
+  ].join(" ");
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
+    stdio: "ignore",
+    windowsHide: true,
+    timeout: 20_000,
+  });
 }
 
 function waitForExit(proc: ChildProcess): Promise<void> {
