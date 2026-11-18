@@ -27,6 +27,8 @@ export interface FilterRule {
 }
 
 export interface FilterConfig {
+  /** Stable id of this rule set. QA calibrates fixtures against this, not the other way around. */
+  version: string;
   defaultAction: FilterAction;
   rules: FilterRule[];
 }

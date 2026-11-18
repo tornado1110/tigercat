@@ -263,8 +263,8 @@ describe("awaitingInput heuristic", () => {
   });
 });
 
-describe("subscriptions survive restart", () => {
-  it("reopens the same sqlite file and still routes to the Worker", async () => {
+describe("restart drops dead Worker subscriptions", () => {
+  it("sends the Thread back through the Router when the process is gone", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "tigercat-restart-"));
     roots.push(root);
     const db = path.join(root, "state.sqlite");
@@ -285,20 +285,23 @@ describe("subscriptions survive restart", () => {
 
     const secondClock = new FakeClock(1_000);
     const second = await startHarness({ clock: secondClock, db, root, durationMs: 60 * 60_000 });
-    const subs = await second.engine.store.subscriptionsForThread(
-      (await second.engine.store.getThreadByKey("feishu:eng:cli"))?.id ?? "",
-    );
-    expect(subs.map((sub) => sub.workerId)).toContain(workerId);
+    const thread = await second.engine.store.getThreadByKey("feishu:eng:cli");
+    const subs = await second.engine.store.subscriptionsForThread(thread?.id ?? "");
+    expect(subs.map((sub) => sub.workerId)).not.toContain(workerId);
+    const dead = await second.engine.store.getSession(workerId);
+    expect(dead?.state).toBe("interrupted");
     const follow = await second.engine.ingest({
       source: "feishu",
       thread: "feishu:eng:cli",
       author: "keith",
-      text: "Also cover the empty list.",
+      text: "Please fix the empty list.",
       kind: "im.message",
       timestamp: 2_000,
     });
-    expect(follow.router).toBe(false);
-    expect(follow.deliveredTo).toEqual([workerId]);
+    await second.engine.settle();
+    expect(follow.router).toBe(true);
+    expect(follow.action).toBe("respond");
+    expect(follow.deliveredTo).not.toContain(workerId);
     await second.engine.close();
     await second.store.close();
   });

@@ -138,12 +138,16 @@ export class Engine {
     await this.store.setMeta("router_busy", "0");
     const sessions = await this.store.listSessions("worker");
     for (const session of sessions) {
-      if (!isTerminal(session.state) && session.state !== "idle") {
-        await this.transition(session.id, "interrupted");
-        await this.emit("worker.error", session.id, {
-          message: "interrupted by restart; process was not resumed",
-        });
-      }
+      if (isTerminal(session.state)) continue;
+      // No live handle survives the process. That is an abnormal exit:
+      // release every subscription so the Thread goes back through the Router.
+      // interrupt() does not do this; only kill and this path do.
+      await this.transition(session.id, "interrupted");
+      await this.releaseSubscriptions(session.id);
+      await this.emit("worker.error", session.id, {
+        message: "worker process was not alive after restart",
+        code: "interrupted",
+      });
     }
     this.scheduleFlush();
   }
@@ -778,7 +782,7 @@ export class Engine {
     const active = [];
     for (const sub of subs) {
       const session = await this.store.getSession(sub.workerId);
-      if (!session || session.state === "killed" || session.state === "error") continue;
+      if (!session || isTerminal(session.state)) continue;
       active.push(sub);
     }
     return active;

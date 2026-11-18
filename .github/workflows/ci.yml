@@ -22,4 +22,5 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - uses: astral-sh/setup-uv@v5
-      - run: npm run test:tck
+      - name: acp-tck v0.4.0 (win32 killpg teardown is unverified, not a pass)
+        run: npm run test:tck

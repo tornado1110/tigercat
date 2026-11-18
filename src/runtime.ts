@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { Readable, Writable } from "node:stream";
+import { Readable, Transform, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Clock } from "./clock.js";
 import { TigerError } from "./errors.js";
@@ -146,9 +146,27 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
     if (!proc.stdin || !proc.stdout) {
       throw new TigerError("bad_runtime", `failed to pipe runtime ${runtime.name}`);
     }
+    let garbage = "";
+    const guardedStdout = new Transform({
+      transform(chunk, _encoding, callback) {
+        garbage += chunk.toString("utf8");
+        let newline = garbage.indexOf("\n");
+        while (newline >= 0) {
+          const line = garbage.slice(0, newline).trim();
+          garbage = garbage.slice(newline + 1);
+          newline = garbage.indexOf("\n");
+          if (line.length > 0 && !line.startsWith("{")) {
+            callback(new Error(`non JSON-RPC stdout: ${line.slice(0, 120)}`));
+            return;
+          }
+        }
+        callback(null, chunk);
+      },
+    });
+    proc.stdout.pipe(guardedStdout);
     const stream = acp.ndJsonStream(
       Writable.toWeb(proc.stdin) as WritableStream<Uint8Array>,
-      Readable.toWeb(proc.stdout) as ReadableStream<Uint8Array>,
+      Readable.toWeb(guardedStdout) as ReadableStream<Uint8Array>,
     );
     const updates: RuntimeUpdate[] = [];
     const connection = acp

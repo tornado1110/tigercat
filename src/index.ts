@@ -1,7 +1,7 @@
 export { VERSION } from "./version.js";
 export { deriveAwaitingInput } from "./awaiting.js";
 export { FakeClock, SystemClock, type Clock } from "./clock.js";
-export { defaultConfig, loadConfig, saveConfig, configPath, loadDefaultRules } from "./config.js";
+export { defaultConfig, loadConfig, saveConfig, configPath, loadDefaultRules, DEFAULT_FILTER_VERSION } from "./config.js";
 export { Engine, type EngineOptions, type IngestResult } from "./engine.js";
 export { TigerError } from "./errors.js";
 export { admit, type Admission, type FilterRule, type RuleInput } from "./filter.js";

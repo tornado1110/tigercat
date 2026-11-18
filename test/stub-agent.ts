@@ -5,6 +5,7 @@
  * an abort signal instead of a timer.
  */
 import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
@@ -39,7 +40,9 @@ const connection = acp
   })
   .onRequest(acp.methods.agent.session.new, ({ params }) => {
     if (scenario === "leak-child-process") {
-      spawn(process.execPath, ["-e", "setInterval(()=>{}, 1e9)"], { stdio: "ignore" });
+      const child = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1e9)"], { stdio: "ignore" });
+      const pidFile = process.env.TIGERCAT_LEAK_PIDFILE;
+      if (pidFile && child.pid) writeFileSync(pidFile, String(child.pid));
     }
     const sessionId = "stub-session";
     sessions.set(sessionId, { pending: null });
@@ -61,7 +64,14 @@ const connection = acp
       process.stdout.write("this is not json-rpc\n");
       await never(pending.signal);
     }
-    if (scenario === "hang") await never(pending.signal);
+    if (scenario === "ignore-cancel") {
+      // Stay in the turn until the process is killed. session/cancel is ignored above.
+      await new Promise<void>(() => undefined);
+    }
+    if (scenario === "hang") {
+      await chunk(client, params.sessionId, "hanging");
+      await never(pending.signal);
+    }
     if (scenario === "crash-mid-turn") {
       await chunk(client, params.sessionId, "partial");
       process.exit(1);

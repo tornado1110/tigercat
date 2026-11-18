@@ -4,7 +4,9 @@ A Super-agent router for coding agents: one resident ACP router that dispatches 
 
 TigerCat sits on the [Agent Client Protocol](https://agentclientprotocol.com). Upstream it **is** an ACP agent (`tigercat acp`), so hosts such as cc-connect or Zed can drive it. Downstream it is an ACP client that launches Workers on any registered ACP runtime. Feishu and DingTalk stay in those hosts; TigerCat does not implement IM channels.
 
-It is not a subagent tool. A resident Router only routes and talks to the human. Workers own one task each, subscribe to Threads, and report back to the Router. The Router's MCP tool list has no shell and no edit tools.
+It is not a subagent tool. A resident Router only routes and talks to the human. Workers own one task each, subscribe to Threads, and report back to the Router.
+
+This repository is a week-1 feasibility skeleton. It is not a completed M0. Real Claude Code / Codex sessions, a Feishu round-trip, a real model as the Router, and proof that a vendor harness has no native shell or edit tools are all still unverified. TigerCat's own MCP catalog omitting those tools does not say anything about the tools a downstream agent ships itself. Cross-channel and shared-PR ingress are M1, not this skeleton.
 
 ## Quickstart
 
@@ -30,7 +32,7 @@ tigercat runtime add codex \
   --permission ask
 ```
 
-Point `coordinator_runtime` in `~/.tigercat/config.toml` at the Router runtime. Admission rules default to `examples/rules.default.toml` (allowlist, bots, CI, stop, explicit work, chatter). `ignore` never calls the Router.
+Point `coordinator_runtime` in `~/.tigercat/config.toml` at the Router runtime. The admission policy is `examples/rules.default.toml`, currently version `2026-11-18.1`. Explicit whole-message chatter (`thanks`, `lol`, `morning`) is `ignore` and makes zero Router calls. Unknown natural language such as `Morning all` or `coffee break` is `candidate` when nobody is subscribed, and a clarification on an already subscribed Thread is `respond` to that Worker. Candidates are not rewritten to `ignore`.
 
 ```bash
 tigercat acp
@@ -57,11 +59,11 @@ Triggers are admitted by the ordered rule engine, then routed:
 - Anything else is batched into the Router's next turn. `candidate` is only judged there; `respond` with no subscriber is spawned.
 - `spawn` returns `{ "status": "started" }` immediately. Results are pushed when the Router is idle, and queued into one batch when it is busy. `wait` is optional.
 - A stop phrase from the rules cancels the current turn (`session/cancel`) and **keeps** subscriptions, so "stop, do X instead" still reaches that Worker.
-- `kill`, or an abnormal Worker exit, drops every subscription and keeps the worktree for a later attach. The Thread goes back through the Router.
+- `interrupt` cancels the current turn and keeps subscriptions. `kill`, a crash, or a restart that finds no live Worker process drops every subscription and keeps the worktree. The Thread goes back through the Router.
 
 `worker.turn_end.awaitingInput` is a TigerCat annotation, not an ACP field. The agent's `stopReason` is stored as ACP sent it (usually `end_turn`). TigerCat sets `awaitingInput` only when that reason is `end_turn` and the Worker's text looks like a question or a request for clarification.
 
-State lives in `node:sqlite` behind a `Store` interface. The process keeps sockets and timers only. A restart resumes Threads, subscriptions, and undelivered Router events from the database.
+State lives in `node:sqlite` behind a `Store` interface. The process keeps sockets and timers only. A restart reloads Threads and any undelivered Router queue. Worker processes do not survive it, so their subscriptions are released.
 
 ## Tests
 
@@ -69,4 +71,4 @@ State lives in `node:sqlite` behind a `Store` interface. The process keeps socke
 npm test
 ```
 
-`npm run test:tck` runs [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` against `tigercat acp` (needs [uv](https://docs.astral.sh/uv/)). Replay fixtures use the JSONL schema documented by the test engineer; the harness is `test/harness/`. The fixture files themselves are not in this repo.
+`npm run test:tck` runs [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` against `tigercat acp` (needs [uv](https://docs.astral.sh/uv/)). On Windows that pin calls `os.killpg` in its own teardown. If that is the only error, the script prints the affected requirement ids as **UNVERIFIED** and does not count them as passes. Replay fixtures use the test engineer's JSONL schema; the harness is `test/harness/`. Fixture files are owned by QA and are not edited here to erase label diffs.

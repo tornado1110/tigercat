@@ -12,9 +12,16 @@ export function defaultRulesPath(): string {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "examples", "rules.default.toml");
 }
 
-export function loadDefaultRules(): FilterRule[] {
+export const DEFAULT_FILTER_VERSION = "2026-11-18.1";
+
+export function loadDefaultPolicy(): { version: string; rules: FilterRule[] } {
   const raw = parse(readFileSync(defaultRulesPath(), "utf8")) as Record<string, unknown>;
-  return parseRules(raw.rules);
+  const version = typeof raw.version === "string" ? raw.version : DEFAULT_FILTER_VERSION;
+  return { version, rules: parseRules(raw.rules) };
+}
+
+export function loadDefaultRules(): FilterRule[] {
+  return loadDefaultPolicy().rules;
 }
 
 export function defaultConfig(): AppConfig {
@@ -24,7 +31,11 @@ export function defaultConfig(): AppConfig {
     summaryMaxChars: DEFAULT_SUMMARY_MAX_CHARS,
     defaultWorkerRuntime: "worker",
     maxConcurrency: 4,
-    filter: { defaultAction: "candidate", rules: loadDefaultRules() },
+    filter: {
+      version: loadDefaultPolicy().version,
+      defaultAction: "candidate",
+      rules: loadDefaultRules(),
+    },
     runtimes: [],
   };
 }
@@ -75,6 +86,7 @@ function normalizeConfig(raw: Record<string, unknown>): AppConfig {
     defaultWorkerRuntime: stringOr(raw.default_worker_runtime, base.defaultWorkerRuntime),
     maxConcurrency: numberOr(raw.max_concurrency, base.maxConcurrency),
     filter: {
+      version: stringOr(filterRaw.version, base.filter.version),
       defaultAction: actionOr(filterRaw.default, "candidate"),
       rules: raw.filter === undefined || filterRaw.rules === undefined
         ? loadDefaultRules()
@@ -95,6 +107,7 @@ function serializeConfig(config: AppConfig): Record<string, unknown> {
     default_worker_runtime: config.defaultWorkerRuntime,
     max_concurrency: config.maxConcurrency,
     filter: {
+      version: config.filter.version,
       default: config.filter.defaultAction,
       rules: config.filter.rules.map((rule) => ({
         ...(rule.name ? { name: rule.name } : {}),

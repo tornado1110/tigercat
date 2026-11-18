@@ -1,7 +1,15 @@
-# Fixture filter policy (issue #20).
-# Ordered rules, first match wins. This file is the default TigerCat
-# admission config: replay assertions come from these rules, not from
-# hard-coded branches in the engine.
+# Default admission policy. Version this string when behavior changes.
+# QA fixtures are calibrated against this version; they are not the source
+# of the behavior, and this file is not rewritten to erase fixture diffs.
+version = "2026-11-18.1"
+
+# Ordered rules, first match wins. The engine does not special-case these
+# names. Match keys: source, thread_id_prefix, kind, is_bot, text (regex),
+# has_subscriber. A `not` table inverts its inner predicate.
+# Text regexes are case-insensitive only when the pattern starts with `(?i)`.
+# They are matched with JavaScript RegExp against the whole text only when
+# the pattern itself is anchored. `interrupt = true` cancels the current
+# turn and keeps subscriptions.
 #
 # Match keys: source, thread_id_prefix, kind, is_bot, text (regex),
 # has_subscriber. A `not` table inverts its inner predicate.
@@ -75,6 +83,11 @@ outcome = "respond"
   [rules.match]
   text = "(?i)@tigercat|\\bplease\\s+(add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep)\\b|^(?:please\\s+)?(add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep)\\b"
 
+# Explicit whole-message chatter only. "Morning all" and "coffee break"
+# do not match: the extra words miss the `$` anchor, so they stay
+# `candidate` (no subscriber) or `subscribed-clarification` (subscriber).
+# A follow-up such as "lol thanks for the fix, but the empty list still
+# prints null" is not discarded.
 [[rules]]
 name = "chatter"
 outcome = "ignore"

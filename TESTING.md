@@ -63,9 +63,24 @@ The harness in `test/harness/` consumes the fixture JSONL schema (`id`, `ts`, `s
 ## PR gate
 Unit + integration + acp-tck (MANDATORY tier) on ubuntu, macos, windows. No coverage percentage target yet; every bug fix ships with a regression test.
 
+## Milestone labels
+
+This tree is a feasibility skeleton. It does not complete M0.
+
+| Item | Milestone | In this skeleton |
+|---|---|---|
+| Rule filter, subscription routing, `spawn` returns Started, sqlite restart | skeleton | implemented and tested with fakes plus stdio stubs |
+| Real Claude Code / Codex dual harness | M0 | not run |
+| Feishu via cc-connect | M0 | not run |
+| Real model as the Router, native shell/edit isolation inside that harness | M0 | not run. TigerCat's MCP list is not evidence about the vendor's own tools |
+| Cross-channel continuity and a shared PR feeding two Workers | M1 | not implemented. The scripted brain subscribes only the Threads passed to `spawn` |
+| GitHub / CI event ingress | M1 | not implemented. `ci.result` rules exist so a future ingress can use them |
+
+acp-tck v0.4.0 on Windows calls `os.killpg` while closing the agent. That API is missing on win32. When that AttributeError is the only failure, CI prints the requirement ids as UNVERIFIED. A missing check is not a pass.
+
 ## Week 1 acceptance
-- [ ] `tigercat acp` passes acp-tck MANDATORY requirements.
-- [ ] Hooked into cc-connect as a generic ACP agent; a Feishu message reaches the coordinator.
-- [ ] Coordinator (Claude Code) spawns a Codex worker in its own worktree; worker edits one file.
-- [ ] Worker result is pushed back to the coordinator without a blocking `wait`, and the reply shows up in Feishu.
-- [ ] Same flow passes in CI with stub agents only, no API keys.
+- [ ] `tigercat acp` passes acp-tck MANDATORY requirements where the harness can run. Windows `os.killpg` teardown failures stay unverified.
+- [ ] Hooked into cc-connect as a generic ACP agent; a Feishu message reaches the coordinator. (M0, not this PR.)
+- [ ] Coordinator (Claude Code) spawns a Codex worker in its own worktree; worker edits one file. (M0, not this PR.)
+- [ ] Worker result is pushed back to the coordinator without a blocking `wait`, and the reply shows up in Feishu. (M0, not this PR.)
+- [x] The same control flow is covered in CI with stub agents and no API keys. Real stdio coverage is `test/integration/stub-stdio.test.ts`.
