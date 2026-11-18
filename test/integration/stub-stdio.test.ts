@@ -11,14 +11,14 @@ afterEach(async () => {
 });
 
 async function removeTree(dir: string): Promise<void> {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
       rmSync(dir, { recursive: true, force: true });
       return;
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
       if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
   rmSync(dir, { recursive: true, force: true });
