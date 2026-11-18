@@ -8,6 +8,7 @@ import { TigerError } from "./errors.js";
 import { newId } from "./ids.js";
 import { decidePermission } from "./permissions.js";
 import { SecretRegistry } from "./redact.js";
+import { resolveRuntime } from "./builtins.js";
 import type { LaunchContext, RuntimeFactory, RuntimeHandle } from "./runtime.js";
 import { spill } from "./spill.js";
 import { acceptsSend, assertTransition, isTerminal } from "./state.js";
@@ -61,6 +62,8 @@ interface LiveWorker {
   grace?: ClockTimer;
   busy: boolean;
   terminalEmitted: boolean;
+  /** Set for `kill()` so the process exit is not treated as a crash. */
+  suppressExit: boolean;
 }
 
 /**
@@ -179,6 +182,7 @@ export class Engine {
       runtime: runtime.name,
       cwd,
       pid: handle.pid ?? null,
+      acpSessionId: handle.acpSessionId ?? null,
       updatedAt: this.clock.now(),
     });
     this.brain = new AcpRouterBrain(
@@ -498,6 +502,7 @@ export class Engine {
     const session = await this.requireWorker(id);
     if (session.state === "killed") return { status: "killed", idempotent: true };
     const live = this.live.get(id);
+    if (live) live.suppressExit = true;
     await live?.handle?.kill().catch(() => undefined);
     if (live?.stall) this.clock.clearTimeout(live.stall);
     if (live?.grace) this.clock.clearTimeout(live.grace);
@@ -601,6 +606,7 @@ export class Engine {
       live.handle = handle;
       await this.store.updateSession(session.id, {
         pid: handle.pid ?? null,
+        acpSessionId: handle.acpSessionId ?? null,
         updatedAt: this.clock.now(),
       });
       if (this.closed) {
@@ -636,6 +642,11 @@ export class Engine {
       },
       onPermission: (request) =>
         this.answerPermission(session.id, "worker", runtime.permission, request),
+      onExit: () => {
+        const live = this.liveOf(session.id);
+        if (live.suppressExit || this.closed) return;
+        void this.failWorker(session.id, new TigerError("worker_exited", "runtime process exited"));
+      },
     };
   }
 
@@ -976,11 +987,7 @@ export class Engine {
   }
 
   private runtimeByName(name: string): RuntimeConfig {
-    const runtime = this.config.runtimes.find((entry) => entry.name === name);
-    if (!runtime || !runtime.command) {
-      throw new TigerError("unknown_runtime", `unknown runtime ${name}`);
-    }
-    return runtime;
+    return resolveRuntime(this.config, name);
   }
 
   private async resolveThread(ref: string, source: string) {
@@ -994,7 +1001,7 @@ export class Engine {
   private liveOf(id: string): LiveWorker {
     let live = this.live.get(id);
     if (!live) {
-      live = { busy: false, terminalEmitted: false };
+      live = { busy: false, terminalEmitted: false, suppressExit: false };
       this.live.set(id, live);
     }
     return live;

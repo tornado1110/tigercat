@@ -6,7 +6,7 @@ TigerCat sits on the [Agent Client Protocol](https://agentclientprotocol.com). U
 
 It is not a subagent tool. A resident Router only routes and talks to the human. Workers own one task each, subscribe to Threads, and report back to the Router.
 
-This repository is a week-1 feasibility skeleton. It is not a completed M0. Real Claude Code / Codex sessions, a Feishu round-trip, a real model as the Router, and proof that a vendor harness has no native shell or edit tools are all still unverified. TigerCat's own MCP catalog omitting those tools does not say anything about the tools a downstream agent ships itself. Cross-channel and shared-PR ingress are M1, not this skeleton.
+This repository is a week-1 feasibility skeleton. It is not a completed M0. Real Claude Code / Codex sessions, a Feishu round-trip, a real model as the Router, and proof that a vendor harness has no native shell or edit tools are all still unverified. CI drives the `claude-code` and `codex` profiles through the stdio stub. The manual commands for a real binary are below. TigerCat's own MCP catalog omitting those tools does not say anything about the tools a downstream agent ships itself. Cross-channel and shared-PR ingress are M1, not this skeleton.
 
 ## Quickstart
 
@@ -17,20 +17,44 @@ npm install
 npm run build
 npm link
 
-tigercat runtime add claude \
-  --command npx \
-  --arg -y \
-  --arg @agentclientprotocol/claude-agent-acp \
-  --tag router \
-  --permission ask
-
-tigercat runtime add codex \
-  --command npx \
-  --arg -y \
-  --arg @agentclientprotocol/codex-acp \
-  --tag worker \
-  --permission ask
+tigercat runtime list
+tigercat runtime test claude-code
+tigercat runtime test codex
 ```
+
+`claude-code` and `codex` are built in. `runtime test` runs `initialize`, `session/new`, and `session/prompt`.
+
+With no `claude` or `codex` binary, and with `TIGERCAT_RUNTIME_LIVE` unset, that test handshakes a local dry-run agent. The report has `mode: "dry-run"` and `vendorExecuted: false`. Claude Code and Codex are not started, and no API key is read.
+
+A real run, once the binary is installed:
+
+```bash
+TIGERCAT_CLAUDE_BIN="$(command -v claude)" tigercat runtime test claude-code
+TIGERCAT_CODEX_BIN="$(command -v codex)" tigercat runtime test codex
+```
+
+`TIGERCAT_CLAUDE_BIN` is forwarded as `CLAUDE_CODE_EXECUTABLE`. `TIGERCAT_CODEX_BIN` is forwarded as `CODEX_PATH`. Claude Code uses an existing `claude` login or `ANTHROPIC_API_KEY`. Codex uses `CODEX_API_KEY` or `OPENAI_API_KEY`. On a headless machine set `NO_BROWSER=1` so Codex does not open a ChatGPT login.
+
+The adapters also bundle a CLI. `TIGERCAT_RUNTIME_LIVE=1` launches that adapter when the vendor binary is not on `PATH`. That downloads the package and talks to the vendor, so it needs credentials:
+
+```bash
+TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test claude-code
+TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test codex
+```
+
+| Runtime | Package | Version | Bin |
+|---|---|---|---|
+| `claude-code` | `@agentclientprotocol/claude-agent-acp` | 0.108.0 | `claude-agent-acp` |
+| `codex` | `@agentclientprotocol/codex-acp` | 2.7.0 | `codex-acp` |
+
+Versions were pinned from the npm registry on 2026-11-18. `claude-code` is started with `CLAUDE_AGENT_ACP_PROTOCOL=v1` so the session stays on the stable v1 lifecycle this client implements (`session/new`, `session/prompt`, `session/cancel`). An adapter you already installed replaces `npx`:
+
+```bash
+TIGERCAT_CLAUDE_CODE_ACP=/usr/local/bin/claude-agent-acp tigercat runtime test claude-code
+TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
+```
+
+`runtime add` with the same name overrides a built-in. Either name can be `coordinator_runtime`. The Router tool list is still only spawn, list, send, read, interrupt, wait, kill, subscribe, and unsubscribe.
 
 Point `coordinator_runtime` in `~/.tigercat/config.toml` at the Router runtime. The admission policy is `examples/rules.default.toml`, currently version `2026-11-18.1`. Explicit whole-message chatter (`thanks`, `lol`, `morning`) is `ignore` and makes zero Router calls. Unknown natural language such as `Morning all` or `coffee break` is `candidate` when nobody is subscribed, and a clarification on an already subscribed Thread is `respond` to that Worker. Candidates are not rewritten to `ignore`.
 

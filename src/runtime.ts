@@ -30,10 +30,13 @@ export interface LaunchContext {
   mcpServers?: acp.McpServer[];
   onUpdate: (update: RuntimeUpdate) => void;
   onPermission: (request: acp.RequestPermissionRequest) => Promise<acp.RequestPermissionResponse>;
+  /** Process exited on its own. `kill()` does not call this. */
+  onExit?: (info: { code: number | null; signal: NodeJS.Signals | null }) => void;
 }
 
 export interface RuntimeHandle {
   readonly pid: number | undefined;
+  readonly acpSessionId: string | undefined;
   prompt(text: string): Promise<PromptResult>;
   cancel(): Promise<void>;
   kill(): Promise<void>;
@@ -57,6 +60,7 @@ export class FakeTimeRuntimeFactory implements RuntimeFactory {
 
 class FakeHandle implements RuntimeHandle {
   readonly pid = undefined;
+  readonly acpSessionId = undefined;
   private killed = false;
   private cancelCurrent: (() => void) | undefined;
 
@@ -236,7 +240,7 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
         timeoutMs,
         "session/new timed out",
       );
-      return new ProcessHandle(proc, connection, session, updates);
+      return new ProcessHandle(proc, connection, session, updates, ctx.onExit);
     } catch (error) {
       return fail(error);
     }
@@ -246,21 +250,29 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
 class ProcessHandle implements RuntimeHandle {
   private promptReject: ((error: Error) => void) | undefined;
   private exited = false;
+  private suppressExit = false;
 
   constructor(
     private readonly proc: ChildProcess,
     private readonly connection: acp.ClientConnection,
     private readonly session: acp.ActiveSession,
     private readonly updates: RuntimeUpdate[],
+    private readonly onExit: LaunchContext["onExit"],
   ) {
-    this.proc.on("exit", () => {
+    this.proc.on("exit", (code, signal) => {
       this.exited = true;
       this.promptReject?.(new TigerError("worker_exited", "runtime process exited"));
+      if (this.suppressExit) return;
+      this.onExit?.({ code, signal });
     });
   }
 
   get pid(): number | undefined {
     return this.proc.pid;
+  }
+
+  get acpSessionId(): string {
+    return this.session.sessionId;
   }
 
   async prompt(text: string): Promise<PromptResult> {
@@ -293,6 +305,7 @@ class ProcessHandle implements RuntimeHandle {
   }
 
   async kill(): Promise<void> {
+    this.suppressExit = true;
     killProcess(this.proc);
     this.connection.close();
     if (!this.exited) {

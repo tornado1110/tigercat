@@ -16,7 +16,7 @@ did they reach the right Worker, and did the Router stay responsive while Worker
 | Unit | worker state machine, event dedupe/ordering, tool arg validation, stall timer | no | yes |
 | Integration | daemon + scripted stub agents over real stdio ACP | no | yes |
 | Upstream conformance | TigerCat as an ACP agent, checked by [acp-tck](https://github.com/agentclientprotocol/acp-tck) (pinned) | no | yes |
-| Downstream contract | `tigercat runtime test <rt>`: any registered runtime must pass before it can receive work | depends | stub only |
+| Downstream contract | `tigercat runtime test <rt>`: built-ins dry-run when `claude` / `codex` are absent; a configured command is launched as given | dry-run in CI | yes |
 | Real E2E | Claude Code / Codex, a few fixed tasks, hard spend cap; asserts turn *shape*, not content | yes | no (manual / pre-release) |
 
 Fake runtimes: [`testy`](https://agentclientprotocol.github.io/rust-sdk/testy.html) for well-behaved paths, plus our own scripted stub (`test/stub-agent`) for failure modes testy does not cover.
@@ -70,7 +70,7 @@ This tree is a feasibility skeleton. It does not complete M0.
 | Item | Milestone | In this skeleton |
 |---|---|---|
 | Rule filter, subscription routing, `spawn` returns Started, sqlite restart | skeleton | implemented and tested with fakes plus stdio stubs |
-| Real Claude Code / Codex dual harness | M0 | not run |
+| Real Claude Code / Codex dual harness | M0 | ACP client and both profiles are implemented. CI sends one prompt to each profile through the stdio stub (`test/integration/builtin-runtimes.test.ts`). Real binaries were not executed. Manual: `TIGERCAT_CLAUDE_BIN=/path/to/claude tigercat runtime test claude-code` and `TIGERCAT_CODEX_BIN=/path/to/codex tigercat runtime test codex` |
 | Feishu via cc-connect | M0 | not run |
 | Real model as the Router, native shell/edit isolation inside that harness | M0 | not run. TigerCat's MCP list is not evidence about the vendor's own tools |
 | Cross-channel continuity and a shared PR feeding two Workers | M1 | not implemented. The scripted brain subscribes only the Threads passed to `spawn` |
@@ -84,3 +84,5 @@ acp-tck v0.4.0 on Windows calls `os.killpg` while closing the agent. That API is
 - [ ] Coordinator (Claude Code) spawns a Codex worker in its own worktree; worker edits one file. (M0, not this PR.)
 - [ ] Worker result is pushed back to the coordinator without a blocking `wait`, and the reply shows up in Feishu. (M0, not this PR.)
 - [x] The same control flow is covered in CI with stub agents and no API keys. Real stdio coverage is `test/integration/stub-stdio.test.ts`.
+- [x] The same prompt is dispatched to a `claude-code` profile and a `codex` profile, both backed by `test/stub-agent.ts`. `runtime test` for those built-ins dry-runs with no API key when the vendor binary is absent.
+- [ ] Real Claude Code and real Codex. Use the manual commands in the README. This tree did not run them.

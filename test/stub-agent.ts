@@ -10,6 +10,7 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
 const scenario = process.env.TIGERCAT_STUB_SCENARIO ?? "ok";
+const stubName = process.env.TIGERCAT_STUB_NAME ?? "tigercat-stub";
 
 interface Session {
   pending: AbortController | null;
@@ -23,19 +24,19 @@ const stream = acp.ndJsonStream(
 );
 
 const connection = acp
-  .agent({ name: "tigercat-stub" })
+  .agent({ name: stubName })
   .onRequest(acp.methods.agent.initialize, () => {
     if (scenario === "bad-handshake") {
       return {
         protocolVersion: 999,
         agentCapabilities: { loadSession: false },
-        agentInfo: { name: "tigercat-stub", version: "0.0.0" },
+        agentInfo: { name: stubName, version: "0.0.0" },
       };
     }
     return {
       protocolVersion: acp.PROTOCOL_VERSION,
       agentCapabilities: { loadSession: scenario !== "no-session-load" },
-      agentInfo: { name: "tigercat-stub", version: "0.0.0" },
+      agentInfo: { name: stubName, version: "0.0.0" },
     };
   })
   .onRequest(acp.methods.agent.session.new, ({ params }) => {
@@ -107,7 +108,7 @@ const connection = acp
     if (pending.signal.aborted && scenario !== "ignore-cancel") {
       return { stopReason: "cancelled" as const };
     }
-    await chunk(client, params.sessionId, "stub ok");
+    await chunk(client, params.sessionId, okText(params.prompt));
     return { stopReason: "end_turn" as const };
   })
   .onNotification(acp.methods.agent.session.cancel, ({ params }) => {
@@ -117,6 +118,23 @@ const connection = acp
   .connect(stream);
 
 await connection.closed;
+
+function okText(prompt: unknown): string {
+  const text = promptText(prompt);
+  const who = process.env.TIGERCAT_STUB_NAME ? ` [${process.env.TIGERCAT_STUB_NAME}]` : "";
+  return `stub ok${who}${text ? `: ${text}` : ""}`;
+}
+
+function promptText(prompt: unknown): string {
+  if (!Array.isArray(prompt)) return "";
+  return prompt
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const record = block as { type?: unknown; text?: unknown };
+      return record.type === "text" && typeof record.text === "string" ? record.text : "";
+    })
+    .join("");
+}
 
 function chunk(client: acp.AgentContext, sessionId: string, text: string): Promise<void> {
   return client.notify(acp.methods.client.session.update, {

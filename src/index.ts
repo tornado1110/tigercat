@@ -6,6 +6,13 @@ export { Engine, type EngineOptions, type IngestResult } from "./engine.js";
 export { TigerError } from "./errors.js";
 export { admit, type Admission, type FilterRule, type RuleInput } from "./filter.js";
 export { decidePermission } from "./permissions.js";
+export {
+  BUILTIN_RUNTIMES,
+  listRuntimes,
+  resolveRuntime,
+  CLAUDE_AGENT_ACP_VERSION,
+  CODEX_ACP_VERSION,
+} from "./builtins.js";
 export { FakeTimeRuntimeFactory, ProcessRuntimeFactory, type RuntimeFactory } from "./runtime.js";
 export { SqliteStore, type Store } from "./store.js";
 export { assertNoShellOrEditTools, ROUTER_TOOL_NAMES, WORKER_TOOL_NAMES } from "./tools.js";
