@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,6 +31,75 @@ function alive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Regression guard for #28. Windows pays for repeated WMI snapshots inside kill(). */
+const LEAK_REPEATS = process.platform === "win32" ? 20 : 1;
+
+function descendantPids(root: number): number[] {
+  if (process.platform === "win32") return windowsDescendants(root);
+  const found: number[] = [];
+  const stack = [root];
+  const seen = new Set<number>();
+  while (stack.length > 0) {
+    const pid = stack.pop();
+    if (pid === undefined) break;
+    let out = "";
+    try {
+      out = execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+    } catch {
+      out = "";
+    }
+    for (const part of out.split(/\s+/)) {
+      const child = Number(part);
+      if (child > 0 && !seen.has(child)) {
+        seen.add(child);
+        found.push(child);
+        stack.push(child);
+      }
+    }
+  }
+  return found;
+}
+
+function windowsDescendants(root: number): number[] {
+  const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+  const powershell = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const script = `
+$ProgressPreference = 'SilentlyContinue'
+$root = ${root}
+$procs = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)
+$byParent = @{}
+foreach ($p in $procs) {
+  $id = [int]$p.ProcessId
+  $parent = [int]$p.ParentProcessId
+  if (-not $byParent.ContainsKey($parent)) { $byParent[$parent] = New-Object System.Collections.Generic.List[int] }
+  [void]$byParent[$parent].Add($id)
+}
+$stack = New-Object System.Collections.Generic.Stack[int]
+$stack.Push($root)
+$seen = New-Object System.Collections.Generic.HashSet[int]
+$out = New-Object System.Collections.Generic.List[int]
+while ($stack.Count -gt 0) {
+  $id = [int]$stack.Pop()
+  if (-not $byParent.ContainsKey($id)) { continue }
+  foreach ($child in @($byParent[$id])) {
+    if ($seen.Add([int]$child)) { [void]$out.Add([int]$child); $stack.Push([int]$child) }
+  }
+}
+Write-Output ($out -join ',')
+`;
+  try {
+    const stdout = execFileSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", "-"], {
+      input: script,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 15_000,
+    });
+    return stdout.split(/[^0-9]+/).map(Number).filter((pid) => pid > 0 && pid !== root);
+  } catch {
+    return [];
   }
 }
 
@@ -168,36 +238,48 @@ describe("real stdio stub-agent", () => {
   });
 
   it("leak-child-process: kill reaps the child", async () => {
-    const pidFile = path.join(tmpdir(), `tigercat-leak-${process.pid}.pid`);
-    const harness = await startStdioEngine("leak-child-process", { TIGERCAT_LEAK_PIDFILE: pidFile });
-    roots.push(harness.root);
-    const spawned = await harness.engine.spawn({
-      runtime: "leak-child-process",
-      prompt: "leak",
-      threads: ["feishu:eng:cli"],
-    });
-    await waitForEvent(harness.engine, (event) => event.type === "worker.spawned");
-    const started = Date.now();
-    let pid = 0;
-    while (Date.now() - started < 5_000) {
+    for (let iteration = 1; iteration <= LEAK_REPEATS; iteration += 1) {
+      const pidFile = path.join(tmpdir(), `tigercat-leak-${process.pid}-${iteration}.pid`);
+      const harness = await startStdioEngine("leak-child-process", { TIGERCAT_LEAK_PIDFILE: pidFile });
+      roots.push(harness.root);
       try {
-        pid = Number(readFileSync(pidFile, "utf8"));
-        if (pid > 0) break;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 30));
+        const spawned = await harness.engine.spawn({
+          runtime: "leak-child-process",
+          prompt: "leak",
+          threads: ["feishu:eng:cli"],
+        });
+        await waitForEvent(harness.engine, (event) => event.type === "worker.spawned");
+        const started = Date.now();
+        let child = 0;
+        while (Date.now() - started < 5_000) {
+          try {
+            child = Number(readFileSync(pidFile, "utf8"));
+            if (child > 0) break;
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 30));
+          }
+        }
+        expect(child, `iteration ${iteration} leaked child`).toBeGreaterThan(0);
+        expect(alive(child), `iteration ${iteration} child should be alive before kill`).toBe(true);
+        const session = await harness.engine.store.getSession(spawned.workerId);
+        const stub = session?.pid ?? 0;
+        expect(stub, `iteration ${iteration} stub pid`).toBeGreaterThan(0);
+        const tracked = new Set<number>([stub, child, ...descendantPids(stub)]);
+        await harness.engine.kill(spawned.workerId);
+        const deadline = Date.now() + 3_000;
+        let survivors = [...tracked].filter((pid) => alive(pid));
+        while (Date.now() < deadline && survivors.length > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          survivors = [...tracked].filter((pid) => alive(pid));
+        }
+        expect(survivors, `iteration ${iteration} descendant pids still alive`).toEqual([]);
+      } finally {
+        await harness.engine.close();
+        await harness.store.close();
       }
     }
-    expect(pid).toBeGreaterThan(0);
-    expect(alive(pid)).toBe(true);
-    await harness.engine.kill(spawned.workerId);
-    const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline && alive(pid)) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    expect(alive(pid)).toBe(false);
-    await harness.engine.close();
-    await harness.store.close();
-  });
+    console.log(`leak-child iterations passed: ${LEAK_REPEATS}`);
+  }, 120_000);
 
   it("bad-handshake: version mismatch is worker.error and releases the subscription", async () => {
     const harness = await startStdioEngine("bad-handshake");
