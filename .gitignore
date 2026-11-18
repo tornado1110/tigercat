@@ -6,3 +6,6 @@ coverage/
 *.sqlite-wal
 *.sqlite-shm
 .tigercat/
+.env
+.env.*
+!.env.example
