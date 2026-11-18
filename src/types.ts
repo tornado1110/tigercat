@@ -41,6 +41,8 @@ export interface RuntimeConfig {
   tags: string[];
   description: string;
   permission: PermissionPolicy;
+  /** Pass the args to CreateProcess unchanged. Used for the cmd.exe fallback. */
+  windowsVerbatimArguments?: boolean;
 }
 
 export interface AppConfig {

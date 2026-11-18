@@ -210,7 +210,63 @@ export function launchConfig(spec: AdapterSpec, env: NodeJS.ProcessEnv): Runtime
   }
   const installed = installedAdapter(spec);
   if (installed) return runtimeFrom(spec, process.execPath, [installed], childEnv);
-  return runtimeFrom(spec, npxCommand(), ["-y", `${spec.packageName}@${spec.version}`], childEnv);
+  const npxArgs = ["-y", `${spec.packageName}@${spec.version}`];
+  const cli = npxCliPath(process.execPath, process.platform);
+  const spawnSpec = buildAdapterCommand(process.platform, env, {
+    execPath: process.execPath,
+    npxArgs,
+    npxCliExists: process.platform === "win32" && isFile(cli),
+  });
+  return runtimeFrom(spec, spawnSpec.command, spawnSpec.args, childEnv, spawnSpec.windowsVerbatimArguments);
+}
+
+export interface AdapterCommand {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+}
+
+/** Path of npm's npx JS entry next to a Windows node.exe. */
+export function npxCliPath(execPath: string, platform: NodeJS.Platform = process.platform): string {
+  const pathFor = platform === "win32" ? path.win32 : path.posix;
+  return pathFor.join(pathFor.dirname(execPath), "node_modules", "npm", "bin", "npx-cli.js");
+}
+
+/**
+ * How to launch `npx` without spawning a `.cmd` directly.
+ * Node throws EINVAL for `.cmd`/`.bat` since CVE-2024-27980 unless a shell is used.
+ * User-influenced args stay off `shell: true`.
+ */
+export function buildAdapterCommand(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  input: { execPath: string; npxArgs: string[]; npxCliExists: boolean },
+): AdapterCommand {
+  if (platform !== "win32") {
+    return { command: "npx", args: input.npxArgs };
+  }
+  if (input.npxCliExists) {
+    return {
+      command: input.execPath,
+      args: [npxCliPath(input.execPath, platform), ...input.npxArgs],
+    };
+  }
+  return {
+    command: env.ComSpec || env.COMSPEC || "cmd.exe",
+    args: ["/d", "/s", "/c", quoteCmdScript(["npx.cmd", ...input.npxArgs])],
+    windowsVerbatimArguments: true,
+  };
+}
+
+function quoteCmdArg(arg: string): string {
+  if (arg.length === 0) return '""';
+  if (!/[\t\n\r "&|<>^%]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+/** One command string for `cmd.exe /d /s /c`. /s strips the outer quotes. */
+function quoteCmdScript(args: string[]): string {
+  return `"${args.map(quoteCmdArg).join(" ")}"`;
 }
 
 function dryRunConfig(spec: AdapterSpec): RuntimeConfig {
@@ -294,11 +350,13 @@ function installedAdapter(spec: AdapterSpec): string | undefined {
   return isFile(entry) ? entry : undefined;
 }
 
-function npxCommand(): string {
-  return process.platform === "win32" ? "npx.cmd" : "npx";
-}
-
-function runtimeFrom(spec: AdapterSpec, command: string, args: string[], env: Record<string, string>): RuntimeConfig {
+function runtimeFrom(
+  spec: AdapterSpec,
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  windowsVerbatimArguments?: boolean,
+): RuntimeConfig {
   return {
     name: spec.name,
     command,
@@ -307,6 +365,7 @@ function runtimeFrom(spec: AdapterSpec, command: string, args: string[], env: Re
     tags: spec.tags,
     description: spec.description,
     permission: spec.permission,
+    ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   };
 }
 

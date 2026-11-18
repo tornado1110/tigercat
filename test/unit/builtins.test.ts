@@ -1,8 +1,11 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  buildAdapterCommand,
   builtinByName,
   launchConfig,
   listRuntimes,
+  npxCliPath,
   planRuntimeTest,
   resolveRuntime,
 } from "../../src/builtins.js";
@@ -16,13 +19,23 @@ describe("built-in ACP runtimes", () => {
   it("pins the official claude-code and codex adapters", () => {
     const claude = launchConfig(builtinByName("claude-code")!, quiet);
     const codex = launchConfig(builtinByName("codex")!, quiet);
-    const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-    expect(claude.command).toBe(npx);
-    expect(claude.args).toEqual(["-y", "@agentclientprotocol/claude-agent-acp@0.108.0"]);
+    const npxCliExists = process.platform === "win32" && existsSync(npxCliPath(process.execPath));
+    const claudeNpx = buildAdapterCommand(process.platform, quiet, {
+      execPath: process.execPath,
+      npxArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.108.0"],
+      npxCliExists,
+    });
+    expect(claude.command).toBe(process.platform === "win32" ? claudeNpx.command : "npx");
+    expect(claude.args).toEqual(process.platform === "win32" ? claudeNpx.args : ["-y", "@agentclientprotocol/claude-agent-acp@0.108.0"]);
     expect(claude.env.CLAUDE_AGENT_ACP_PROTOCOL).toBe("v1");
     expect(claude.env.CLAUDE_CODE_EXECUTABLE).toBeUndefined();
-    expect(codex.command).toBe(npx);
-    expect(codex.args).toEqual(["-y", "@agentclientprotocol/codex-acp@2.7.0"]);
+    const codexNpx = buildAdapterCommand(process.platform, quiet, {
+      execPath: process.execPath,
+      npxArgs: ["-y", "@agentclientprotocol/codex-acp@2.7.0"],
+      npxCliExists,
+    });
+    expect(codex.command).toBe(process.platform === "win32" ? codexNpx.command : "npx");
+    expect(codex.args).toEqual(process.platform === "win32" ? codexNpx.args : ["-y", "@agentclientprotocol/codex-acp@2.7.0"]);
     expect(codex.env.CODEX_PATH).toBeUndefined();
   });
 
@@ -73,5 +86,47 @@ describe("built-in ACP runtimes", () => {
   it("rejects an unknown runtime", () => {
     expect(() => resolveRuntime(defaultConfig(), "worker", quiet)).toThrow(TigerError);
     expect(() => planRuntimeTest(defaultConfig(), "missing", quiet)).toThrow(/unknown runtime missing/);
+  });
+});
+
+describe("buildAdapterCommand", () => {
+  const execPath = "C:\\Program Files\\nodejs\\node.exe";
+
+  it("uses npx on posix", () => {
+    expect(buildAdapterCommand("linux", {}, {
+      execPath: "/usr/bin/node",
+      npxArgs: ["-y", "@agentclientprotocol/codex-acp@2.7.0"],
+      npxCliExists: true,
+    })).toEqual({
+      command: "npx",
+      args: ["-y", "@agentclientprotocol/codex-acp@2.7.0"],
+    });
+  });
+
+  it("runs npx-cli.js with node on win32 when the file exists", () => {
+    const command = buildAdapterCommand("win32", {}, {
+      execPath,
+      npxArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.108.0"],
+      npxCliExists: true,
+    });
+    expect(command.command).toBe(execPath);
+    expect(command.windowsVerbatimArguments).toBeUndefined();
+    expect(command.args).toEqual([
+      npxCliPath(execPath, "win32"),
+      "-y",
+      "@agentclientprotocol/claude-agent-acp@0.108.0",
+    ]);
+    expect(command.args[0]).toBe("C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js");
+  });
+
+  it("quotes win32 cmd.exe fallback args that contain spaces", () => {
+    const command = buildAdapterCommand("win32", { ComSpec: "C:\\Windows\\System32\\cmd.exe" }, {
+      execPath,
+      npxArgs: ["-y", "pkg with spaces"],
+      npxCliExists: false,
+    });
+    expect(command.command).toBe("C:\\Windows\\System32\\cmd.exe");
+    expect(command.windowsVerbatimArguments).toBe(true);
+    expect(command.args).toEqual(["/d", "/s", "/c", '"npx.cmd -y "pkg with spaces""']);
   });
 });

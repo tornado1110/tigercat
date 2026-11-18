@@ -142,6 +142,7 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
       windowsHide: true,
+      windowsVerbatimArguments: runtime.windowsVerbatimArguments === true,
     });
     let stderr = "";
     proc.stderr?.setEncoding("utf8");
