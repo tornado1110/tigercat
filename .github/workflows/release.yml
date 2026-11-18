@@ -73,9 +73,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # Trusted publishing needs Node >= 22.14 and npm CLI >= 11.5.1.
-          # The "22" spec selects the current Node 22 release on the runner.
-          node-version: "22"
+          # npm Trusted Publishing needs npm >= 11.5.1. Node 22 images ship
+          # npm 10.x, which cannot do OIDC publish. Node 24 ships npm 11.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
           # npm's trusted-publishing guide: do not cache release builds.
           package-manager-cache: false

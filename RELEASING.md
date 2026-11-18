@@ -54,20 +54,23 @@ Repository **Settings → Actions → General → Workflow permissions**:
 
 The workflow uses the default `GITHUB_TOKEN` only. Do not create a personal
 access token for it. One consequence: the release pull request and the GitHub
-Release do not themselves start other workflows, including CI. The commits in
-the release were already tested on their own pull requests, and the publish
-job runs `npm test` on the tagged tree before `npm publish`. If publishing
-fails, use **Re-run failed jobs** on that workflow run. Re-running the whole
-workflow will not publish again, because the release already exists.
+Release do not themselves start other workflows, including CI. What that means
+for required status checks is in [branch protection](#5-branch-protection-on-main)
+below, including the GitHub App option. The commits in the release were
+already tested on their own pull requests, and the publish job runs `npm test`
+on the tagged tree before `npm publish`. If publishing fails, use **Re-run
+failed jobs** on that workflow run. Re-running the whole workflow will not
+publish again, because the release already exists.
 
 ### 2. Publish to npm with trusted publishing
 
 Preferred path: [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers)
 (OIDC). The publish job requests `id-token: write`. It reads `NPM_TOKEN` only
 for the fallback in the next section. Trusted publishing needs npm CLI 11.5.1
-or newer and Node.js 22.14 or newer. The workflow selects the current Node 22
-release on the GitHub-hosted runner, which meets that requirement. Self-hosted
-runners cannot use trusted publishing.
+or newer. The publish job uses Node.js 24 because that runner image ships npm
+11. Node.js 22 images ship npm 10, which cannot complete an OIDC publish. The
+package itself still declares `engines.node` of `>=22.13`; only the publish
+job is on Node 24. Self-hosted runners cannot use trusted publishing.
 
 Open the `tigercat` package settings on npmjs.com and add a trusted publisher.
 If the package does not exist yet, publish it once with the token fallback,
@@ -133,12 +136,34 @@ Use a ruleset or classic branch protection so releases only come from reviewed
 pull requests:
 
 - Require a pull request before merging.
-- Require the code skeleton's CI checks, and CodeQL once it is uploading
-  results.
+- Require the code skeleton's CI checks on contributor pull requests, and
+  CodeQL once it is uploading results. See the release-PR caveat below before
+  you mark those checks required.
 - Do not require the Release workflow as a pull request check. It only runs on
   pushes to `main`.
 - Keep Release Please from bypassing review: a maintainer merges the release
   pull request.
+
+Release Please opens its release pull request with the default `GITHUB_TOKEN`,
+so other workflows, including CI, do not run on that pull request. If `main`
+requires those CI checks, the release pull request stays blocked because the
+checks never start. Pick one of these:
+
+- Do not make CI a required check for that pull request. A ruleset bypass for
+  the maintainer is enough: the maintainer can merge the release pull request
+  without the checks that will never be reported. Contributor pull requests
+  still need the checks. Do not give that bypass to everyone.
+- Or configure Release Please to use a GitHub App token, so opening the
+  release pull request triggers CI like any other pull request. Create a
+  GitHub App installed on `tornado1110/tigercat` with Contents (read and
+  write) and Pull requests (read and write). Store the App ID and the App
+  private key as Actions secrets named `RELEASE_PLEASE_APP_ID` and
+  `RELEASE_PLEASE_APP_PRIVATE_KEY`. Do not commit either value. In
+  `release.yml`, mint an installation token from those secrets (for example
+  with `actions/create-github-app-token`, pinned to a full commit SHA) and
+  pass that token to `googleapis/release-please-action` as `token`, instead of
+  `secrets.GITHUB_TOKEN`. The workflow in this repository does not do that
+  yet; it uses `GITHUB_TOKEN` until you choose this option.
 
 Dependabot also needs pull requests to be allowed from GitHub Actions, which
 is the same checkbox as in step 1.
@@ -146,7 +171,7 @@ is the same checkbox as in step 1.
 ## What the workflow expects from the package
 
 `release.yml` skips Release Please until `package.json` exists. Publishing runs
-`npm ci` against `package-lock.json`, then `npm run build` and `npm test` when
-those scripts exist, then `npm publish`. The runner uses current Node.js 22,
-which must be at least 22.14 for trusted publishing and must satisfy
-`engines.node`. The code skeleton owns those files; this document does not.
+`npm ci` against `package-lock.json` on Node.js 24, then `npm run build` and
+`npm test` when those scripts exist, then `npm publish`. Node 24 supplies npm
+11, which trusted publishing requires. The package's own `engines.node` is
+still `>=22.13`. The code skeleton owns those files; this document does not.
