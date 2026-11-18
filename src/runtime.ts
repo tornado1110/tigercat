@@ -1,4 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 import { Readable, Transform, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Clock } from "./clock.js";
@@ -426,7 +427,8 @@ function Get-Kids([int[]]$roots) {
 }
 function Stop-Tree([int]$id) {
   if ($id -le 0) { return }
-  & taskkill.exe /PID $id /T /F 1>$null 2>$null | Out-Null
+  $taskkill = Join-Path $env:SystemRoot "System32\\taskkill.exe"
+  & $taskkill /PID $id /T /F 1>$null 2>$null | Out-Null
 }
 function Test-Live([int]$id) {
   if ($id -le 0) { return $false }
@@ -470,18 +472,41 @@ Write-Output ($ids -join ',')
 exit 0
 `;
 
+function windowsSystemRoot(): string {
+  return process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+}
+
+function windowsKillEnv(root: number): NodeJS.ProcessEnv {
+  const rootDir = windowsSystemRoot();
+  const system32 = path.join(rootDir, "System32");
+  const pathValue = [
+    system32,
+    path.join(system32, "WindowsPowerShell", "v1.0"),
+    process.env.PATH,
+    process.env.Path,
+  ].filter((entry): entry is string => Boolean(entry)).join(";");
+  return {
+    ...process.env,
+    SystemRoot: rootDir,
+    PATH: pathValue,
+    Path: pathValue,
+    TIGERCAT_KILL_ROOT: String(root),
+  };
+}
+
 async function reapWindowsTree(root: number): Promise<void> {
   let stdout = "";
+  const powershell = path.join(windowsSystemRoot(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   try {
     stdout = execFileSync(
-      "powershell.exe",
+      powershell,
       ["-NoProfile", "-NonInteractive", "-Command", "-"],
       {
         input: WINDOWS_REAP_SCRIPT,
         encoding: "utf8",
         windowsHide: true,
         timeout: WINDOWS_REAP_TIMEOUT_MS,
-        env: { ...process.env, TIGERCAT_KILL_ROOT: String(root) },
+        env: windowsKillEnv(root),
       },
     );
   } catch (error) {
@@ -506,11 +531,13 @@ async function reapWindowsTree(root: number): Promise<void> {
 }
 
 function taskKillTree(pid: number): void {
+  const taskkill = path.join(windowsSystemRoot(), "System32", "taskkill.exe");
   try {
-    execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+    execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], {
       stdio: "ignore",
       windowsHide: true,
       timeout: 10_000,
+      env: windowsKillEnv(pid),
     });
   } catch {
     // already gone, or still exiting; the poll decides
