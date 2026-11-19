@@ -28,4 +28,10 @@ jobs:
       - run: npm test
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
       - name: acp-tck v0.4.0 (win32 killpg teardown is unverified, not a pass)
+        id: tck
         run: npm run test:tck
+      # Renders acp-tck-result.json. Exits 0 so it does not hide a TCK failure.
+      # The previous step's status is still the job's pass/fail gate.
+      - name: Write acp-tck verdict to the job summary
+        if: always() && steps.tck.outcome != 'skipped'
+        run: node scripts/acp-tck-summary.mjs
