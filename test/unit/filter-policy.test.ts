@@ -22,7 +22,7 @@ function judge(text: string, extra?: { has_subscriber?: boolean; source?: string
 describe(`default filter ${DEFAULT_FILTER_VERSION}`, () => {
   it("loads the versioned file as the executable policy", () => {
     expect(policy.version).toBe(DEFAULT_FILTER_VERSION);
-    expect(policy.version).toBe("2026-11-18.1");
+    expect(policy.version).toBe("2026-11-19.1");
     expect(policy.defaultAction).toBe("candidate");
     expect(policy.rules.map((rule) => rule.name)).toEqual([
       "upstream-acp",

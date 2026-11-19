@@ -8,7 +8,7 @@
  * Stdout is JSONL only. A composition summary is written to stderr.
  * No dependencies; plain Node. Seeded with mulberry32.
  *
- * Labels follow examples/rules.default.toml version 2026-11-18.1.
+ * Labels follow examples/rules.default.toml version 2026-11-19.1.
  * This generator does not invent a wider ignore list. A spawn subscribes
  * only its home thread, which is what the scripted Router brain does.
  * Schema notes: ../README.md
@@ -31,7 +31,7 @@ Counts are exact. Composition (when there is room):
   ciNoise    = min(remaining, round(count * 0.12))
   chatter    = the rest
 
-\`expect\` labels are the versioned default rules (2026-11-18.1).
+\`expect\` labels are the versioned default rules (2026-11-19.1).
 Each spawn subscribes only its home thread.
 `;
 
@@ -113,16 +113,139 @@ const CHATTER_TEXTS = [
   "coffee break",
 ];
 
-// Copied from examples/rules.default.toml version 2026-11-18.1.
-// A leading (?i) is a flag, matching src/filter.ts. Do not widen these.
-const POLICY_VERSION = "2026-11-18.1";
+// Copied from examples/rules.default.toml version 2026-11-19.1.
+// A leading (?i) / (?iu) is a flag, matching src/filter.ts. `i` is always set.
+// `u` is added only when the pattern asks for it. Do not widen these.
+// normalizeMatchText / normalizePattern stay in lockstep with src/filter.ts.
+const POLICY_VERSION = "2026-11-19.1";
 const CHATTER_PATTERN =
-  "(?i)^(?:morning|good morning|good night|hello|hi|hey|thanks|thank you|thx|ty|ok|okay|\\+1|lol|lgtm|nice|cool|haha|wow|lunch|brb|gtg)[.!\\s]*$|^(?:👍|🎉|👋|😂|🙏|✅|❤️)+$";
+  "(?iu)^[¡¿]*(?:(?<![\\p{L}\\p{N}])(?:morning|good morning|good night|hello|hi|hey|thanks|thank you|thx|ty|ok|okay|\\+1|lol|lgtm|nice|cool|haha|wow|lunch|brb|gtg|muchas gracias|de acuerdo|gracias|vale|sí|si|adiós)(?![\\p{L}\\p{N}])|ありがとうございます|ありがとう|お疲れ様です|お疲れさまです|お疲れ様|お疲れさま|おつかれさまです|おつかれさま|おつかれ|了解です|了解|감사합니다|고마워요|알겠습니다)[.!\\s。、]*$|^(?:👍|🎉|👋|😂|🙏|✅|❤️)+$";
 const STOP_PATTERN =
   "(?i)please stop this task|cancel this worker|interrupt this, I will finish it myself|stop, do not continue|stop, do .+ instead";
 const EXPLICIT_PATTERN =
   "(?i)@tigercat|\\bplease\\s+(add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep)\\b|^(?:please\\s+)?(add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep)\\b";
 const CI_FAIL_PATTERN = "(?i)fail|failed|failure";
+
+function normalizeMatchText(value) {
+  return value.normalize("NFKC");
+}
+
+// ASCII regex syntax. These split literal runs. Keep in lockstep with src/filter.ts.
+const REGEX_SYNTAX = new Set("^$.*+?()[]{}|/\\-");
+
+function normalizePattern(body, unicode, label) {
+  const chars = [...body];
+  let out = "";
+  let run = "";
+  let inClass = false;
+  let classAtStart = false;
+  const flush = () => {
+    if (!run) return;
+    out += foldLiteralRun(run, inClass, unicode, label);
+    run = "";
+  };
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i] ?? "";
+    if (ch === "\\") {
+      const next = chars[i + 1];
+      const nextCode = next === undefined ? 0 : (next.codePointAt(0) ?? 0);
+      if (next !== undefined && nextCode > 127) {
+        run += next;
+        i += 1;
+        if (inClass) classAtStart = false;
+        continue;
+      }
+      flush();
+      const escape = readEscape(chars, i);
+      out += escape.text;
+      i = escape.next - 1;
+      if (inClass) classAtStart = false;
+      continue;
+    }
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 128 && REGEX_SYNTAX.has(ch)) {
+      flush();
+      out += ch;
+      if (!inClass && ch === "[") {
+        inClass = true;
+        classAtStart = true;
+      } else if (inClass && ch === "^" && classAtStart) {
+        // Negation. A following ] closes an empty negated class, as in JS.
+      } else if (inClass && ch === "]") {
+        inClass = false;
+        classAtStart = false;
+      } else if (inClass) {
+        classAtStart = false;
+      }
+      continue;
+    }
+    run += ch;
+    if (inClass) classAtStart = false;
+  }
+  flush();
+  return out;
+}
+
+function foldLiteralRun(run, inClass, unicode, label) {
+  if (inClass) {
+    for (const cp of run) {
+      if ([...cp.normalize("NFKC")].length > 1) {
+        throw new Error(
+          `rule ${label}: multi-character compatibility forms are not supported inside character classes`,
+        );
+      }
+    }
+  }
+  const folded = run.normalize("NFKC");
+  if (folded === run) return run;
+  let out = "";
+  for (const cp of folded) {
+    const code = cp.codePointAt(0) ?? 0;
+    if (code > 0xffff) {
+      out += unicode ? `\\u{${code.toString(16).toUpperCase()}}` : surrogateEscapes(code);
+    } else if (code < 128 && REGEX_SYNTAX.has(cp)) {
+      out += `\\u${code.toString(16).toUpperCase().padStart(4, "0")}`;
+    } else {
+      out += cp;
+    }
+  }
+  return out;
+}
+
+function surrogateEscapes(code) {
+  const value = code - 0x10000;
+  const hi = 0xd800 + (value >> 10);
+  const lo = 0xdc00 + (value & 0x3ff);
+  const hex = (n) => n.toString(16).toUpperCase().padStart(4, "0");
+  return `\\u${hex(hi)}\\u${hex(lo)}`;
+}
+
+function readEscape(chars, start) {
+  const next = chars[start + 1];
+  if (next === undefined) return { text: "\\", next: start + 1 };
+  if ((next === "u" || next === "x" || next === "p" || next === "P") && chars[start + 2] === "{") {
+    const end = chars.indexOf("}", start + 2);
+    if (end !== -1) return { text: chars.slice(start, end + 1).join(""), next: end + 1 };
+  }
+  if (next === "u" && isHex(chars, start + 2, 4)) {
+    return { text: chars.slice(start, start + 6).join(""), next: start + 6 };
+  }
+  if (next === "x" && isHex(chars, start + 2, 2)) {
+    return { text: chars.slice(start, start + 4).join(""), next: start + 4 };
+  }
+  if (next === "c" && chars[start + 2] !== undefined) {
+    return { text: chars.slice(start, start + 3).join(""), next: start + 3 };
+  }
+  return { text: chars.slice(start, start + 2).join(""), next: start + 2 };
+}
+
+function isHex(chars, start, length) {
+  for (let i = 0; i < length; i += 1) {
+    const ch = chars[start + i];
+    if (ch === undefined || !/^[0-9a-fA-F]$/.test(ch)) return false;
+  }
+  return true;
+}
 
 function testPolicyRegex(pattern, text) {
   let flags = "";
@@ -132,7 +255,9 @@ function testPolicyRegex(pattern, text) {
     flags = inline[1];
     body = pattern.slice(inline[0].length);
   }
-  return new RegExp(body, flags).test(text);
+  if (!flags.includes("i")) flags += "i";
+  body = normalizePattern(body, flags.includes("u"), "pattern");
+  return new RegExp(body, flags).test(normalizeMatchText(text));
 }
 
 function parseArgs(argv) {

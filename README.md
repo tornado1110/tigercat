@@ -58,7 +58,7 @@ TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
 
 同名的 `runtime add` 会覆盖内置项。这两个名字都可以当作 `coordinator_runtime`。Router 的工具列表仍然只有 spawn、list、send、read、interrupt、wait、kill、subscribe 和 unsubscribe。
 
-`coordinator_runtime` 指的是你自己安装的 ACP agent。本仓库不附带那个程序。这个字段留空，才会继续用脚本化 brain；见 [docs/operations.md](docs/operations.md)。准入策略文件是 `examples/rules.default.toml`，当前版本为 `2026-11-18.1`。整句都是明确的闲聊（`thanks`、`lol`、`morning`）时，结果为 `ignore`，Router 调用次数为零。当没有人订阅时，`Morning all` 或 `coffee break` 这类未知自然语言是 `candidate`；在已经订阅的 Thread 上做澄清，则是对该 Worker 的 `respond`。`candidate` 不会被改写成 `ignore`。
+`coordinator_runtime` 指的是你自己安装的 ACP agent。本仓库不附带那个程序。这个字段留空，才会继续用脚本化 brain；见 [docs/operations.md](docs/operations.md)。准入策略文件是 `examples/rules.default.toml`，当前版本为 `2026-11-19.1`。整句都是明确的闲聊（`thanks`、`lol`、`morning`，以及该文件里的日语、韩语、西班牙语确认语）时，结果为 `ignore`，Router 调用次数为零。当没有人订阅时，`Morning all` 或 `coffee break` 这类未知自然语言是 `candidate`；在已经订阅的 Thread 上做澄清，则是对该 Worker 的 `respond`。`candidate` 不会被改写成 `ignore`。触发文本做 NFKC。规则里的字面量同样折叠，折叠产生的正则元字符会转义，因此全角标点仍是字面量；反斜杠后面的非 ASCII 字符也并入这段字面量，所以 `\＊` 命中 `*`。匹配始终不区分大小写，重音保留：未列出的 `adios` 不会命中 `adiós`。字符类里的单个码位不能折叠成多个码位，否则 `loadConfig` 报出带规则名的错误，服务在规则改好之前不会启动。日文和韩文按子串匹配，拉丁文用 Unicode 字母边界 `(?<![\p{L}\p{N}])…(?![\p{L}\p{N}])`（规则自己带 `u` 标志，不用 `\b`）。句子里还夹着任务时，这条规则不忽略。
 
 ```bash
 tigercat acp

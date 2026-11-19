@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ b4fd4c489c29457310cd886755953b0ab1bc1242 -->
+<!-- i18n-source: README.md @ 50d58949fab671c9f4514d69e19299955cdf8837 -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat
@@ -61,7 +61,7 @@ TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
 
 同じ名前の `runtime add` は組み込みを上書きします。どちらの名前も `coordinator_runtime` にできます。Router のツール一覧は、今も spawn、list、send、read、interrupt、wait、kill、subscribe、unsubscribe だけです。
 
-`coordinator_runtime` は、自分でインストールした ACP agent の名前です。このリポジトリはそのプログラムを同梱しません。フィールドを空のままにすると、スクリプト化された brain のままです。[docs/operations.md](docs/i18n/ja/operations.md) を見てください。入場ポリシーのファイルは `examples/rules.default.toml` で、現在のバージョンは `2026-11-18.1` です。メッセージ全体が明示的な雑談（`thanks`、`lol`、`morning`）のとき、結果は `ignore` になり、Router の呼び出しはゼロです。誰も購読していないとき、`Morning all` や `coffee break` のような未知の自然言語は `candidate` です。既に購読されている Thread 上の確認は、その Worker への `respond` です。`candidate` が `ignore` に書き換えられることはありません。
+`coordinator_runtime` は、自分でインストールした ACP agent の名前です。このリポジトリはそのプログラムを同梱しません。フィールドを空のままにすると、スクリプト化された brain のままです。[docs/operations.md](docs/i18n/ja/operations.md) を見てください。入場ポリシーのファイルは `examples/rules.default.toml` で、現在のバージョンは `2026-11-19.1` です。メッセージ全体が明示的な雑談（`thanks`、`lol`、`morning`、およびそのファイルの日本語・韓国語・スペイン語の確認）のとき、結果は `ignore` になり、Router の呼び出しはゼロです。誰も購読していないとき、`Morning all` や `coffee break` のような未知の自然言語は `candidate` です。既に購読されている Thread 上の確認は、その Worker への `respond` です。`candidate` が `ignore` に書き換えられることはありません。トリガー本文は NFKC です。規則のリテラルも同様に畳み、畳みで生じた正規表現のメタ文字はエスケープするので、全角の句読点はリテラルのままです。バックスラッシュの直後の非 ASCII 文字もそのリテラルに入り、`\＊` は `*` に一致します。照合は常に大文字小文字を区別せず、アクセントは残します。一覧にない `adios` は `adiós` に一致しません。文字クラス内の 1 符号位置が複数の符号位置に畳まれる場合、`loadConfig` は規則名付きで失敗し、直すまでサービスは起動しません。日本語と韓国語は部分文字列、ラテン文字は Unicode の文字境界 `(?<![\p{L}\p{N}])…(?![\p{L}\p{N}])` です（規則が `u` フラグを持ち、`\b` は使いません）。文にタスクも含まれるときは無視しません。
 
 ```bash
 tigercat acp
