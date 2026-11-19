@@ -22,7 +22,7 @@ are marked tested.
 | Worker ACP sessions survive a restart | not implemented; `loadSession` is advertised as false |
 | Orphan worker processes reaped on the next start | not implemented |
 | Feishu or DingTalk inside TigerCat | not implemented; those channels stay in the host |
-| A built-in DeepSeek runtime or `DEEPSEEK_API_KEY` reader | not implemented |
+| DeepSeek Chat Completions Router (`router.provider = "deepseek"`) | implemented; reads `DEEPSEEK_API_KEY`; not live-tested |
 
 ## Layout
 
@@ -55,8 +55,7 @@ a built-in. It does not print environment values.
 
 ## Credentials
 
-TigerCat does not log in to a provider and does not read a DeepSeek variable.
-Keys are whatever the child process already has.
+With `router.provider = "deepseek"`, `tigercat acp` reads `DEEPSEEK_API_KEY` (or the configured env name) and exits before any request when that variable is missing. That call has not been live-tested. Worker credentials are still whatever the child process already has.
 
 The child environment is the parent environment plus that runtime's `env`
 table. A variable exported in the shell that starts `tigercat acp` is visible
@@ -67,14 +66,12 @@ processes.
 
 Keep the three credential sets apart:
 
-1. **Router (DeepSeek or any other model).** There is no built-in DeepSeek
-   runtime and no `DEEPSEEK_API_KEY` reader. A real Router is an ACP agent you
-   already installed outside this repository. This page has no install command
-   for that agent. Register the command you already have with `runtime add`,
-   then set `coordinator_runtime` to that runtime's name. Give that agent its
-   own credential in its own login or in an environment that is not the Worker
-   environment. Do not put the key in `config.toml`. Omitting
-   `coordinator_runtime` keeps the scripted brain, which makes no model call.
+1. **Router.** `router.provider = "deepseek"` calls DeepSeek Chat Completions
+   with the key from `DEEPSEEK_API_KEY`. That path has not been live-tested.
+   Do not put the key in `config.toml`. Omitting `router.provider` keeps the
+   scripted brain, which makes no model call. An ACP coordinator is still a
+   separate program you install and name with `coordinator_runtime`. Do not
+   set `router.provider` and `coordinator_runtime` together.
 2. **Workers (`claude-code`, `codex`).** Both are built in with permission
    `ask`. Claude Code uses an existing `claude` login or `ANTHROPIC_API_KEY`.
    Codex uses `CODEX_API_KEY` or `OPENAI_API_KEY`. Those are the vendor
@@ -310,7 +307,7 @@ like a Worker that never reaches `worker.turn_end`.
 
 - No Router executable, and no install steps for one. The only Router that
   runs with nothing else installed is the in-process scripted brain.
-- No DeepSeek client and no `DEEPSEEK_API_KEY` handling.
+- A DeepSeek Chat Completions Router is implemented (`router.provider = "deepseek"`, key from `DEEPSEEK_API_KEY`). It has not been live-tested. The scripted brain remains the default.
 - The default worker runtime name `worker` is not a built-in.
 - `session/load` is off. A restart does not resume a Worker ACP session and
   does not reap saved pids. SIGINT and SIGTERM have no handler.

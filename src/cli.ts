@@ -19,6 +19,7 @@ import { listenForTools } from "./ipc.js";
 import { listRuntimes, planRuntimeTest, type ListedRuntime, type RuntimeTestPlan } from "./builtins.js";
 import { redactText } from "./redact.js";
 import { ProcessRuntimeFactory } from "./runtime.js";
+import { chatRouterFromConfig } from "./router-llm.js";
 import { SqliteStore } from "./store.js";
 import type { PermissionPolicy, RuntimeConfig } from "./types.js";
 import { VERSION } from "./version.js";
@@ -93,6 +94,14 @@ async function cmdAcp(configFile: string | undefined): Promise<number> {
   const db = process.env.TIGERCAT_DB ?? path.join(path.dirname(configPath(configFile)), "tigercat.sqlite");
   if (db !== ":memory:") mkdirSync(path.dirname(db), { recursive: true });
   const store = SqliteStore.open(db);
+  const router = config.routerProvider;
+  if (router && config.coordinatorRuntime) {
+    throw new TigerError(
+      "router_conflict",
+      "router.provider and coordinator_runtime are both set. Use the DeepSeek tool Router or an ACP coordinator, not both. No process was started.",
+    );
+  }
+  const brain = router ? chatRouterFromConfig(router, process.env) : undefined;
   const engine = new Engine({
     store,
     clock: new SystemClock(),
@@ -100,7 +109,12 @@ async function cmdAcp(configFile: string | undefined): Promise<number> {
     factory: new ProcessRuntimeFactory(),
     workspaceRoot: process.cwd(),
     mcpLaunch: mcpLaunch(),
+    ...(brain ? { brain } : {}),
   });
+  if (router) {
+    const key = process.env[router.apiKeyEnv];
+    if (key) engine.noteSecret(router.apiKeyEnv, key);
+  }
   const ipc = await listenForTools(engine.tools);
   engine.attachIpc({
     port: ipc.port,

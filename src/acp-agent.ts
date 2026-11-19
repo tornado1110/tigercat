@@ -2,7 +2,7 @@ import { Readable, Writable } from "node:stream";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import * as acp from "@agentclientprotocol/sdk";
-import type { Engine } from "./engine.js";
+import type { Engine, IngestResult } from "./engine.js";
 import { VERSION } from "./version.js";
 
 interface UpstreamSession {
@@ -54,6 +54,7 @@ export async function serveUpstream(engine: Engine): Promise<void> {
           .filter(Boolean)
           .join("\n");
         const meta = (params._meta ?? {}) as { thread_id?: string; author?: string; kind?: string; is_bot?: boolean };
+        const startedAt = Date.now();
         const result = await engine.ingest({
           source: "acp",
           thread: typeof meta.thread_id === "string" ? meta.thread_id : `acp:${params.sessionId}`,
@@ -61,17 +62,12 @@ export async function serveUpstream(engine: Engine): Promise<void> {
           kind: typeof meta.kind === "string" ? meta.kind : "im.message",
           isBot: meta.is_bot === true,
           text: text || "(empty)",
-          timestamp: Date.now(),
+          timestamp: startedAt,
           replyTo: null,
         });
         await engine.settle();
         if (pending.signal.aborted) return { stopReason: "cancelled" as const };
-        const reply =
-          result.action === "ignore"
-            ? "Ignored by the admission rules."
-            : result.router
-              ? "Routed to the resident Router."
-              : `Delivered to ${result.deliveredTo.length} worker(s).`;
+        const reply = await formatUpstreamReply(engine, result, startedAt);
         await client.notify(acp.methods.client.session.update, {
           sessionId: params.sessionId,
           update: {
@@ -110,6 +106,53 @@ export async function serveUpstream(engine: Engine): Promise<void> {
     process.stdin.once("close", stop);
     void connection.closed.then(stop);
   });
+}
+
+/**
+ * Text returned on the still-open ACP prompt. A Router error is the text.
+ * A Worker that has not finished is named as unfinished. Nothing here
+ * invents a model result. Set TIGERCAT_UPSTREAM_WAIT_MS to wait for the
+ * Worker turn before the prompt returns; 0 does not wait.
+ */
+export async function formatUpstreamReply(
+  engine: Engine,
+  result: IngestResult,
+  startedAt: number,
+): Promise<string> {
+  if (result.action === "ignore") return "Ignored by the admission rules.";
+  const events = await engine.events();
+  const end = [...events].reverse().find((event) => event.type === "coordinator.turn_end");
+  let text: string;
+  if (end?.payload.stopReason === "error") {
+    text = `Router failed: ${String(end.payload.message ?? "unknown error")}`;
+  } else if (typeof end?.payload.reply === "string" && end.payload.reply.length > 0) {
+    text = end.payload.reply;
+  } else if (result.router) {
+    text = "Routed to the resident Router.";
+  } else {
+    text = `Delivered to ${result.deliveredTo.length} worker(s).`;
+  }
+  const waitMs = Number(process.env.TIGERCAT_UPSTREAM_WAIT_MS ?? "0");
+  const workers = (await engine.workers()).filter((worker) => worker.createdAt >= startedAt - 50);
+  const ids = [...new Set([...result.deliveredTo, ...workers.map((worker) => worker.id)])];
+  if (ids.length > 0 && Number.isFinite(waitMs) && waitMs > 0) {
+    await engine.wait(ids, "all", waitMs);
+  }
+  if (ids.length === 0) return text;
+  const fresh = await engine.events();
+  const notes = ids.map((id) => {
+    const turn = [...fresh].reverse().find((event) => event.type === "worker.turn_end" && event.workerId === id);
+    const failure = [...fresh].reverse().find((event) => event.type === "worker.error" && event.workerId === id);
+    if (turn) return `Worker ${id} finished: ${workerNote(turn.payload)}`;
+    if (failure) return `Worker ${id} failed: ${workerNote(failure.payload)}`;
+    return `Worker ${id} has not finished. No result was invented.`;
+  });
+  return [text, ...notes].join("\n");
+}
+
+function workerNote(payload: Record<string, unknown>): string {
+  const message = payload.message ?? payload.text ?? payload.summary ?? payload.stopReason;
+  return typeof message === "string" && message.length > 0 ? message : "no text";
 }
 
 async function closeSessions(sessions: Map<string, UpstreamSession>): Promise<void> {

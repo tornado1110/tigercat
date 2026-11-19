@@ -31,6 +31,14 @@ export type SessionState =
 
 export type PermissionPolicy = "auto" | "ask" | "deny";
 
+/** DeepSeek Chat Completions. Not an OpenAI or Anthropic credential. */
+export interface RouterProviderConfig {
+  provider: "deepseek";
+  baseUrl: string;
+  model: string;
+  apiKeyEnv: string;
+}
+
 export type FilterAction = "respond" | "candidate" | "ignore";
 
 export interface RuntimeConfig {
@@ -50,6 +58,8 @@ export interface AppConfig {
   cancelGraceMs: number;
   summaryMaxChars: number;
   coordinatorRuntime?: string;
+  /** Tool-calling Router. Unset keeps the scripted brain. */
+  routerProvider?: RouterProviderConfig;
   defaultWorkerRuntime: string;
   maxConcurrency: number;
   filter: FilterConfig;

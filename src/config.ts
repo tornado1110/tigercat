@@ -5,7 +5,7 @@ import { parse, stringify } from "smol-toml";
 import { fileURLToPath } from "node:url";
 import { TigerError } from "./errors.js";
 import type { FilterRule, RuleMatch } from "./filter.js";
-import type { AppConfig, FilterAction, PermissionPolicy, RuntimeConfig } from "./types.js";
+import type { AppConfig, FilterAction, PermissionPolicy, RouterProviderConfig, RuntimeConfig } from "./types.js";
 import { DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_SUMMARY_MAX_CHARS } from "./types.js";
 
 export function defaultRulesPath(): string {
@@ -83,6 +83,7 @@ function normalizeConfig(raw: Record<string, unknown>): AppConfig {
     cancelGraceMs: numberOr(raw.cancel_grace_ms, base.cancelGraceMs),
     summaryMaxChars: numberOr(raw.summary_max_chars, base.summaryMaxChars),
     coordinatorRuntime: stringOrUndefined(raw.coordinator_runtime),
+    routerProvider: normalizeRouter(raw.router),
     defaultWorkerRuntime: stringOr(raw.default_worker_runtime, base.defaultWorkerRuntime),
     maxConcurrency: numberOr(raw.max_concurrency, base.maxConcurrency),
     filter: {
@@ -104,6 +105,16 @@ function serializeConfig(config: AppConfig): Record<string, unknown> {
     cancel_grace_ms: config.cancelGraceMs,
     summary_max_chars: config.summaryMaxChars,
     ...(config.coordinatorRuntime ? { coordinator_runtime: config.coordinatorRuntime } : {}),
+    ...(config.routerProvider
+      ? {
+          router: {
+            provider: config.routerProvider.provider,
+            base_url: config.routerProvider.baseUrl,
+            model: config.routerProvider.model,
+            api_key_env: config.routerProvider.apiKeyEnv,
+          },
+        }
+      : {}),
     default_worker_runtime: config.defaultWorkerRuntime,
     max_concurrency: config.maxConcurrency,
     filter: {
@@ -125,6 +136,24 @@ function serializeConfig(config: AppConfig): Record<string, unknown> {
       description: runtime.description,
       permission: runtime.permission,
     })),
+  };
+}
+
+function normalizeRouter(value: unknown): RouterProviderConfig | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  if (raw.default_worker_runtime !== undefined) {
+    throw new TigerError(
+      "invalid_args",
+      "default_worker_runtime belongs at the top level of the config. A copy inside [router] is ignored by the loader and was rejected.",
+    );
+  }
+  if (raw.provider !== "deepseek") return undefined;
+  return {
+    provider: "deepseek",
+    baseUrl: stringOr(raw.base_url, "https://api.deepseek.com"),
+    model: stringOr(raw.model, "deepseek-flash"),
+    apiKeyEnv: stringOr(raw.api_key_env, "DEEPSEEK_API_KEY"),
   };
 }
 
