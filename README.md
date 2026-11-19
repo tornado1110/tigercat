@@ -125,4 +125,4 @@ Trigger 先经有序规则引擎准入，再按下面的方式路由：
 npm test
 ```
 
-`npm run test:tck` 会对 `tigercat acp` 运行 [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0`（需要 [uv](https://docs.astral.sh/uv/)）。在 Windows 上，这个钉住的版本会在自己的 teardown 里调用 `os.killpg`。脚本把那些 requirement id 打印为 **UNVERIFIED**，并以非零状态退出。killpg teardown 失败会使门禁失败。回放 fixture 使用测试工程师的 JSONL schema；harness 位于 `test/harness/`。Fixture 文件归 QA 所有，这里不会为了抹平标签差异而去改它们。
+`npm run test:tck` 会对 `tigercat acp` 运行 [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0`（需要 [uv](https://docs.astral.sh/uv/)）。在 Windows 上，这个钉住的版本会在自己的 teardown 里调用 `os.killpg`。只有 teardown 真的碰到 `os.killpg` 时，这一步才失败：脚本把那些 requirement id 打印为 **UNVERIFIED**，并按 harness 的状态码退出（非零）。没有碰到时，这一步以 0 退出。killpg teardown 失败不是通过。CI 把 VERDICT、MANDATORY 的 passed/failed/skipped 计数、总数，以及任何 UNVERIFIED 行写进 job summary。回放 fixture 使用测试工程师的 JSONL schema；harness 位于 `test/harness/`。Fixture 文件归 QA 所有，这里不会为了抹平标签差异而去改它们。

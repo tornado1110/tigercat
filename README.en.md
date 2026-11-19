@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 50d58949fab671c9f4514d69e19299955cdf8837 -->
+<!-- i18n-source: README.md @ 702dbb9cfea09b7d1af2d9db66b31dc67bb23a7c -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it.
 
 # TigerCat
@@ -133,4 +133,4 @@ State lives in `node:sqlite` behind a `Store` interface. The process keeps socke
 npm test
 ```
 
-`npm run test:tck` runs [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` against `tigercat acp` (needs [uv](https://docs.astral.sh/uv/)). On Windows that pin calls `os.killpg` in its own teardown. The script prints those requirement ids as **UNVERIFIED** and exits non-zero. A killpg teardown failure fails the gate. Replay fixtures use the test engineer's JSONL schema; the harness is `test/harness/`. Fixture files are owned by QA and are not edited here to erase label diffs.
+`npm run test:tck` runs [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` against `tigercat acp` (needs [uv](https://docs.astral.sh/uv/)). On Windows that pin calls `os.killpg` in its own teardown. The step fails only when that teardown hits `os.killpg`: the script prints those requirement ids as **UNVERIFIED** and exits with the harness status, which is non-zero. Otherwise the step exits 0. A killpg teardown failure is not a pass. CI copies the VERDICT, the MANDATORY passed/failed/skipped counts, the total, and any UNVERIFIED line into the job summary. Replay fixtures use the test engineer's JSONL schema; the harness is `test/harness/`. Fixture files are owned by QA and are not edited here to erase label diffs.

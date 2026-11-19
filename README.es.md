@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 50d58949fab671c9f4514d69e19299955cdf8837 -->
+<!-- i18n-source: README.md @ 702dbb9cfea09b7d1af2d9db66b31dc67bb23a7c -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # TigerCat
@@ -128,4 +128,4 @@ El estado vive en `node:sqlite`, detrás de una interfaz `Store`. El proceso sol
 npm test
 ```
 
-`npm run test:tck` ejecuta [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` contra `tigercat acp` (hace falta [uv](https://docs.astral.sh/uv/)). En Windows, esa versión fijada llama a `os.killpg` en su propio teardown. El script imprime esos id de requisito como **UNVERIFIED** y sale con un estado distinto de cero. Si el teardown de killpg falla, esta compuerta falla. Los fixtures de replay usan el esquema JSONL del ingeniero de pruebas; el harness está en `test/harness/`. Los archivos de fixtures son de QA, y aquí no se editan para borrar diferencias de etiquetas.
+`npm run test:tck` ejecuta [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` contra `tigercat acp` (hace falta [uv](https://docs.astral.sh/uv/)). En Windows, esa versión fijada llama a `os.killpg` en su propio teardown. El paso falla solo cuando ese teardown llega a `os.killpg`: el script imprime esos id de requisito como **UNVERIFIED** y sale con el estado del harness, que no es cero. Si no llega, el paso sale con 0. Un fallo de teardown por killpg no es un pase. CI copia el VERDICT, los recuentos MANDATORY passed/failed/skipped, el total y cualquier línea UNVERIFIED al job summary. Los fixtures de replay usan el esquema JSONL del ingeniero de pruebas; el harness está en `test/harness/`. Los archivos de fixtures son de QA, y aquí no se editan para borrar diferencias de etiquetas.
