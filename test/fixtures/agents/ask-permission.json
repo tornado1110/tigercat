@@ -1,0 +1,252 @@
+{
+  "name": "ask-permission",
+  "description": "Reports a pending edit tool call, then calls session/request_permission and waits. Default path (allow-once): run the edit and end_turn. reject-once: mark the tool failed and end_turn. cancelled outcome: complete the prompt with stopReason cancelled.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_ask_permission",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_ask_permission"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "I'll write src/hello.ts after you allow the edit."
+          },
+          "messageId": "msg_perm_1"
+        }
+      }
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_001",
+          "title": "Writing src/hello.ts",
+          "name": "write_file",
+          "kind": "edit",
+          "status": "pending",
+          "rawInput": {
+            "path": "src/hello.ts",
+            "content": "export const hello = 'hi';\n"
+          },
+          "locations": [
+            {
+              "path": "src/hello.ts",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "request",
+      "method": "session/request_permission",
+      "params": {
+        "sessionId": "$sessionId",
+        "toolCall": {
+          "toolCallId": "call_001",
+          "title": "Writing src/hello.ts",
+          "kind": "edit",
+          "status": "pending",
+          "locations": [
+            {
+              "path": "src/hello.ts",
+              "line": 1
+            }
+          ]
+        },
+        "options": [
+          {
+            "optionId": "allow-once",
+            "name": "Allow once",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "allow-always",
+            "name": "Allow always",
+            "kind": "allow_always"
+          },
+          {
+            "optionId": "reject-once",
+            "name": "Reject",
+            "kind": "reject_once"
+          }
+        ]
+      }
+    }
+  ],
+  "onPermissionOutcome": {
+    "selected": {
+      "allow-once": [
+        {
+          "action": "notify",
+          "method": "session/update",
+          "params": {
+            "sessionId": "$sessionId",
+            "update": {
+              "sessionUpdate": "tool_call_update",
+              "toolCallId": "call_001",
+              "status": "in_progress"
+            }
+          }
+        },
+        {
+          "action": "delay",
+          "ms": 40
+        },
+        {
+          "action": "notify",
+          "method": "session/update",
+          "params": {
+            "sessionId": "$sessionId",
+            "update": {
+              "sessionUpdate": "tool_call_update",
+              "toolCallId": "call_001",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "diff",
+                  "path": "src/hello.ts",
+                  "oldText": null,
+                  "newText": "export const hello = 'hi';\n"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "action": "notify",
+          "method": "session/update",
+          "params": {
+            "sessionId": "$sessionId",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": {
+                "type": "text",
+                "text": "Wrote src/hello.ts."
+              },
+              "messageId": "msg_perm_1"
+            }
+          }
+        },
+        {
+          "action": "complete",
+          "result": {
+            "stopReason": "end_turn"
+          }
+        }
+      ],
+      "allow-always": "allow-once",
+      "reject-once": [
+        {
+          "action": "notify",
+          "method": "session/update",
+          "params": {
+            "sessionId": "$sessionId",
+            "update": {
+              "sessionUpdate": "tool_call_update",
+              "toolCallId": "call_001",
+              "status": "failed",
+              "content": [
+                {
+                  "type": "content",
+                  "content": {
+                    "type": "text",
+                    "text": "Permission rejected."
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "action": "notify",
+          "method": "session/update",
+          "params": {
+            "sessionId": "$sessionId",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": {
+                "type": "text",
+                "text": "I did not write the file because permission was rejected."
+              },
+              "messageId": "msg_perm_1"
+            }
+          }
+        },
+        {
+          "action": "complete",
+          "result": {
+            "stopReason": "end_turn"
+          }
+        }
+      ]
+    },
+    "cancelled": [
+      {
+        "action": "notify",
+        "method": "session/update",
+        "params": {
+          "sessionId": "$sessionId",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call_001",
+            "status": "failed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "Permission request cancelled."
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "action": "complete",
+        "result": {
+          "stopReason": "cancelled"
+        }
+      }
+    ]
+  }
+}

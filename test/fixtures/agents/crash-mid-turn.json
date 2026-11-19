@@ -1,0 +1,88 @@
+{
+  "name": "crash-mid-turn",
+  "description": "Sends two valid agent_message_chunk updates, then exits the process with code 1. It does not answer session/prompt. TigerCat should emit worker.error, not hang.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_crash_mid_turn",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_crash_mid_turn"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Starting the change."
+          },
+          "messageId": "msg_crash_1"
+        }
+      }
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_001",
+          "title": "Editing src/hello.ts",
+          "name": "write_file",
+          "kind": "edit",
+          "status": "in_progress"
+        }
+      }
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still working"
+          },
+          "messageId": "msg_crash_1"
+        }
+      }
+    },
+    {
+      "action": "exit",
+      "code": 1
+    }
+  ]
+}

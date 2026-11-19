@@ -1,0 +1,421 @@
+{
+  "name": "slow-stream",
+  "description": "Streams 20 agent_message_chunk updates with 500 fake-ms gaps (about 10 fake seconds in total). Used to test streaming and the fake Clock; this duration is well under the default 10-minute stall timer.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_slow_stream",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_slow_stream"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 1 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 2 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 3 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 4 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 5 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 6 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 7 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 8 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 9 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 10 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 11 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 12 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 13 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 14 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 15 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 16 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 17 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 18 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 19 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 500
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Chunk 20 of 20. "
+          },
+          "messageId": "msg_slow_1"
+        }
+      }
+    },
+    {
+      "action": "complete",
+      "result": {
+        "stopReason": "end_turn"
+      }
+    }
+  ]
+}

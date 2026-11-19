@@ -1,0 +1,66 @@
+{
+  "name": "no-session-load",
+  "description": "initialize advertises agentCapabilities.loadSession=false. session/new and session/prompt work like the ok scenario. If the client calls session/load anyway, the stub returns JSON-RPC error -32601 (Method not found). Used for the recovery path when a runtime cannot resume a session.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": false,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_no_session_load",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_no_session_load"
+    }
+  },
+  "onSessionLoad": {
+    "error": {
+      "code": -32601,
+      "message": "session/load is not supported"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Session is new; I cannot reload a previous one."
+          },
+          "messageId": "msg_noload_1"
+        }
+      }
+    },
+    {
+      "action": "complete",
+      "result": {
+        "stopReason": "end_turn"
+      }
+    }
+  ]
+}

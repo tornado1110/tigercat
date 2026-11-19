@@ -1,0 +1,250 @@
+{
+  "name": "ignore-cancel",
+  "description": "Non-compliant agent: on session/cancel it keeps streaming and answers session/prompt with stopReason end_turn instead of cancelled. TigerCat should still leave the turn and not hang waiting for cancelled.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_ignore_cancel",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_ignore_cancel"
+    }
+  },
+  "onCancel": {
+    "action": "ignore"
+  },
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "This turn ignores cancellation."
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 1/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 2/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 3/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 4/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 5/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 6/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 7/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 8/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 9/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 1000
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Still going 10/10. "
+          },
+          "messageId": "msg_ignore_1"
+        }
+      }
+    },
+    {
+      "action": "complete",
+      "result": {
+        "stopReason": "end_turn"
+      }
+    }
+  ]
+}

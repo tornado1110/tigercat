@@ -1,0 +1,38 @@
+{
+  "name": "hang",
+  "description": "Handshake and session/new succeed. On session/prompt the stub accepts the request and then sends no updates, no result, and does not exit. TigerCat should emit worker.stalled after the configured idle timeout (default 10 minutes of fake time).",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_hang",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_hang"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "hang"
+    }
+  ]
+}
