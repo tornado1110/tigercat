@@ -1,0 +1,61 @@
+{
+  "name": "ask-input",
+  "description": "Streams a clarifying question and ends the turn with stopReason end_turn. awaitingInput is a TigerCat annotation (not an ACP field): worker.turn_end should set awaitingInput to true so the next user message continues this Worker.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_ask_input",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_ask_input"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "awaitingInput": true,
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "I can add the --json flag. Should the default output stay plain text when --json is omitted?"
+          },
+          "messageId": "msg_ask_1"
+        }
+      }
+    },
+    {
+      "action": "complete",
+      "result": {
+        "stopReason": "end_turn"
+      }
+    }
+  ]
+}

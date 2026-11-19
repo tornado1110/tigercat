@@ -1,0 +1,58 @@
+{
+  "name": "garbage-stdout",
+  "description": "Handshake and session/new are valid JSON-RPC. After session/prompt the stub writes non-JSON-RPC lines to stdout and then hangs (process stays alive, no prompt result). Distinct from crash-mid-turn, which exits after valid chunks.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_garbage_stdout",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_garbage_stdout"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "write_stdout",
+      "raw": "INFO starting agent\n"
+    },
+    {
+      "action": "write_stdout",
+      "raw": "==== not jsonrpc ====\n"
+    },
+    {
+      "action": "write_stdout",
+      "raw": "oops {broken\n"
+    },
+    {
+      "action": "write_stdout",
+      "raw": "ready\n"
+    },
+    {
+      "action": "write_stdout",
+      "raw": "this is not a JSON-RPC message\n"
+    },
+    {
+      "action": "hang"
+    }
+  ]
+}

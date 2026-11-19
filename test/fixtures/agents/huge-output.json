@@ -1,0 +1,69 @@
+{
+  "name": "huge-output",
+  "description": "After a short preamble, streams 1 MiB of agent text as 4 KiB agent_message_chunk updates. Used to test coordinator payload size caps and truncation; do not embed the payload in this file.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_huge_output",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_huge_output"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Beginning a large reply."
+          },
+          "messageId": "msg_huge_1"
+        }
+      }
+    },
+    {
+      "action": "stream_text",
+      "sessionUpdate": "agent_message_chunk",
+      "messageId": "msg_huge_1",
+      "totalBytes": 1048576,
+      "chunkBytes": 4096,
+      "char": "A",
+      "delayMs": 0
+    },
+    {
+      "action": "complete",
+      "result": {
+        "stopReason": "end_turn"
+      }
+    }
+  ]
+}

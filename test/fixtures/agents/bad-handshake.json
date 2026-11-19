@@ -1,0 +1,26 @@
+{
+  "name": "bad-handshake",
+  "description": "initialize returns protocolVersion 999, which a v1 client must not accept. The client should close the connection and fail registration or startup explicitly, never hang. No session methods are reached.",
+  "protocolVersion": 999,
+  "fault": "protocol_version_mismatch",
+  "initialize": {
+    "result": {
+      "protocolVersion": 999,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_bad_handshake"
+}

@@ -1,0 +1,73 @@
+{
+  "name": "leak-child-process",
+  "description": "On session/new the stub starts a detached sleep 3600 in a new process group, reports the child pid, and does not reap it on exit. After the Worker is killed, TigerCat must reap that orphan. The prompt path itself is the same as ok, so the test can run a turn and then kill the Worker.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_leak_child_process",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_leak_child_process"
+    },
+    "sideEffects": [
+      {
+        "action": "spawn_child",
+        "command": "sleep",
+        "args": [
+          "3600"
+        ],
+        "detached": true,
+        "newProcessGroup": true,
+        "reapOnExit": false,
+        "reportPidAs": "leakedPid"
+      }
+    ]
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "A helper process is running in the background."
+          },
+          "messageId": "msg_leak_1"
+        }
+      }
+    },
+    {
+      "action": "complete",
+      "result": {
+        "stopReason": "end_turn"
+      }
+    }
+  ]
+}

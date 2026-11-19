@@ -1,0 +1,139 @@
+{
+  "name": "ok",
+  "description": "Happy path: initialize, session/new, one prompt turn with a tool call and a short reply, then stopReason end_turn.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        }
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      },
+      "authMethods": []
+    }
+  },
+  "sessionId": "sess_stub_ok",
+  "onSessionNew": {
+    "result": {
+      "sessionId": "sess_stub_ok"
+    }
+  },
+  "onCancel": {
+    "action": "cancel"
+  },
+  "onPrompt": [
+    {
+      "action": "delay",
+      "ms": 20
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "I'll write a short hello file."
+          },
+          "messageId": "msg_ok_1"
+        }
+      }
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_001",
+          "title": "Writing src/hello.ts",
+          "name": "write_file",
+          "kind": "edit",
+          "status": "pending",
+          "rawInput": {
+            "path": "src/hello.ts",
+            "content": "export const hello = 'hi';\n"
+          },
+          "locations": [
+            {
+              "path": "src/hello.ts",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_001",
+          "status": "in_progress"
+        }
+      }
+    },
+    {
+      "action": "delay",
+      "ms": 50
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_001",
+          "status": "completed",
+          "content": [
+            {
+              "type": "diff",
+              "path": "src/hello.ts",
+              "oldText": null,
+              "newText": "export const hello = 'hi';\n"
+            }
+          ],
+          "rawOutput": {
+            "ok": true
+          }
+        }
+      }
+    },
+    {
+      "action": "notify",
+      "method": "session/update",
+      "params": {
+        "sessionId": "$sessionId",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Wrote src/hello.ts."
+          },
+          "messageId": "msg_ok_1"
+        }
+      }
+    },
+    {
+      "action": "complete",
+      "result": {
+        "stopReason": "end_turn"
+      }
+    }
+  ]
+}
