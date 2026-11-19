@@ -4,6 +4,7 @@ import { Readable, Transform, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Clock } from "./clock.js";
 import { TigerError } from "./errors.js";
+import { redactText } from "./redact.js";
 import type { RuntimeConfig } from "./types.js";
 
 export interface PromptResult {
@@ -162,7 +163,7 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
           garbage = garbage.slice(newline + 1);
           newline = garbage.indexOf("\n");
           if (line.length > 0 && !line.startsWith("{")) {
-            callback(new Error(`non JSON-RPC stdout: ${line.slice(0, 120)}`));
+            callback(new Error(`non JSON-RPC stdout: ${redactText(line.slice(0, 120))}`));
             return;
           }
         }
@@ -246,9 +247,10 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
       }
       connection.close();
       const message = error instanceof Error ? error.message : String(error);
+      const detail = stderr ? ` (${redactText(stderr.trim())})` : "";
       throw new TigerError(
         "bad_runtime",
-        `${runtime.name}: ${message}${killMessage}${stderr ? ` (${stderr.trim()})` : ""}`,
+        `${runtime.name}: ${redactText(message)}${redactText(killMessage)}${detail}`,
       );
     }
   }
@@ -513,7 +515,8 @@ async function reapWindowsTree(root: number): Promise<void> {
   } catch (error) {
     const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr ?? "") : "";
     const message = error instanceof Error ? error.message : String(error);
-    throw new TigerError("killed", `windows process tree kill failed for ${root}: ${message}${stderr ? ` (${stderr.trim()})` : ""}`);
+    const detail = stderr ? ` (${redactText(stderr.trim())})` : "";
+    throw new TigerError("killed", `windows process tree kill failed for ${root}: ${redactText(message)}${detail}`);
   }
   const pids = new Set<number>([root]);
   for (const match of stdout.matchAll(/\d+/g)) {
