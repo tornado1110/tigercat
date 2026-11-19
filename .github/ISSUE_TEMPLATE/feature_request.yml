@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest a change to TigerCat
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Do not include API keys, tokens, or other
+        secrets.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is difficult or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should TigerCat do instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other approaches you considered.
+
+  - type: textarea
+    id: runtimes
+    attributes:
+      label: ACP runtime(s)
+      description: Which agents or clients would this affect, if any?
+      placeholder: Claude Code, Codex, any ACP agent
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Secrets
+      options:
+        - label: This request does not include API keys, tokens, or other secrets.
+          required: true
