@@ -95,4 +95,4 @@ State lives in `node:sqlite` behind a `Store` interface. The process keeps socke
 npm test
 ```
 
-`npm run test:tck` runs [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` against `tigercat acp` (needs [uv](https://docs.astral.sh/uv/)). On Windows that pin calls `os.killpg` in its own teardown. If that is the only error, the script prints the affected requirement ids as **UNVERIFIED** and does not count them as passes. Replay fixtures use the test engineer's JSONL schema; the harness is `test/harness/`. Fixture files are owned by QA and are not edited here to erase label diffs.
+`npm run test:tck` runs [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` against `tigercat acp` (needs [uv](https://docs.astral.sh/uv/)). On Windows that pin calls `os.killpg` in its own teardown. The script prints those requirement ids as **UNVERIFIED** and exits non-zero. A killpg teardown failure fails the gate. Replay fixtures use the test engineer's JSONL schema; the harness is `test/harness/`. Fixture files are owned by QA and are not edited here to erase label diffs.

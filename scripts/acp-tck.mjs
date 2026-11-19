@@ -4,9 +4,9 @@
  *
  * On Windows the pinned harness calls os.killpg during teardown
  * (tck/common/harness/process.py). That API does not exist on win32.
- * If the only failures are that AttributeError, this script lists the
- * affected requirement ids as UNVERIFIED and exits 0. Those ids are not
- * passes. Any other failure still fails the process.
+ * The script names those requirement ids and then exits with the
+ * harness status. A killpg teardown failure fails this process.
+ * It is not a pass. Issue #25.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -55,21 +55,16 @@ child.on("error", (error) => {
 
 child.on("exit", (code) => {
   const status = code ?? 1;
-  if (status === 0 || process.platform !== "win32") process.exit(status);
-  const killpg = log.includes("has no attribute 'killpg'") || log.includes("os.killpg");
-  const failed = [...log.matchAll(/^\s*(ACP-[A-Z0-9-]+)\s+FAIL\s*$/gm)].map((match) => match[1]);
-  const otherErrors = log
-    .split(/\r?\n/)
-    .filter((line) => /^\s*E\s+\S/.test(line))
-    .filter((line) => !line.includes("killpg") && !line.includes("AttributeError"));
-  if (killpg && failed.length > 0 && otherErrors.length === 0) {
-    console.error("");
-    console.error(
-      "UNVERIFIED on win32 (not a pass): acp-tck v0.4.0 teardown calls os.killpg, which Node's Windows os module does not provide.",
-    );
-    for (const id of failed) console.error(`  ${id}`);
-    console.error("No other assertion errors were found. These requirements were not counted as passed.");
-    process.exit(0);
+  if (status !== 0 && process.platform === "win32") {
+    const killpg = log.includes("has no attribute 'killpg'") || log.includes("os.killpg");
+    if (killpg) {
+      const failed = [...log.matchAll(/^\s*(ACP-[A-Z0-9-]+)\s+FAIL\s*$/gm)].map((match) => match[1]);
+      console.error("");
+      console.error(
+        "acp-tck failed. Windows teardown calls os.killpg, which Node's Windows os module does not provide. This is not a pass.",
+      );
+      for (const id of failed) console.error(`  UNVERIFIED ${id}`);
+    }
   }
   process.exit(status);
 });

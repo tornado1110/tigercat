@@ -25,6 +25,27 @@ async function removeTree(dir: string): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
 }
 
+async function waitForRecordedPid(
+  engine: {
+    store: {
+      getSession(id: string): Promise<{ pid: number | null; state: string } | undefined>;
+    };
+  },
+  workerId: string,
+  iteration: number,
+): Promise<number> {
+  const started = Date.now();
+  while (Date.now() - started < 8_000) {
+    const session = await engine.store.getSession(workerId);
+    if (session?.pid && session.pid > 0) return session.pid;
+    if (session && (session.state === "error" || session.state === "killed")) {
+      throw new Error(`iteration ${iteration} worker ${workerId} is ${session.state} before its pid was recorded`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  throw new Error(`iteration ${iteration} worker ${workerId} pid was not recorded after launch`);
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -249,21 +270,19 @@ describe("real stdio stub-agent", () => {
           threads: ["feishu:eng:cli"],
         });
         await waitForEvent(harness.engine, (event) => event.type === "worker.spawned");
-        const started = Date.now();
+        // worker.spawned is emitted before the process exists. The leaked
+        // child's pid file is written during session/new, which returns
+        // before the parent pid is stored. Read the parent only after that
+        // store update, then the child file is already written.
+        const stub = await waitForRecordedPid(harness.engine, spawned.workerId, iteration);
         let child = 0;
-        while (Date.now() - started < 5_000) {
-          try {
-            child = Number(readFileSync(pidFile, "utf8"));
-            if (child > 0) break;
-          } catch {
-            await new Promise((resolve) => setTimeout(resolve, 30));
-          }
+        try {
+          child = Number(readFileSync(pidFile, "utf8"));
+        } catch {
+          child = 0;
         }
         expect(child, `iteration ${iteration} leaked child`).toBeGreaterThan(0);
         expect(alive(child), `iteration ${iteration} child should be alive before kill`).toBe(true);
-        const session = await harness.engine.store.getSession(spawned.workerId);
-        const stub = session?.pid ?? 0;
-        expect(stub, `iteration ${iteration} stub pid`).toBeGreaterThan(0);
         const tracked = new Set<number>([stub, child, ...descendantPids(stub)]);
         await harness.engine.kill(spawned.workerId);
         const deadline = Date.now() + 3_000;
