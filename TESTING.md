@@ -76,7 +76,7 @@ This tree is a feasibility skeleton. It does not complete M0.
 | Cross-channel continuity and a shared PR feeding two Workers | M1 | not implemented. The scripted brain subscribes only the Threads passed to `spawn` |
 | GitHub / CI event ingress | M1 | not implemented. `ci.result` rules exist so a future ingress can use them |
 
-acp-tck v0.4.0 on Windows calls `os.killpg` while closing the agent. That API is missing on win32. The TCK step fails only when teardown hits `os.killpg`: CI prints those requirement ids as UNVERIFIED and exits with the harness status. Otherwise the step exits 0. A missing check is not a pass. The `test` job writes the VERDICT, the MANDATORY passed/failed/skipped counts, the total, and any UNVERIFIED line to the GitHub Actions job summary.
+acp-tck v0.4.0 on Windows calls `os.killpg` while closing the agent. That API is missing on win32. After the harness finishes, the script exits with its status and does not treat that teardown as a pass. A MANDATORY failure fails the step on every platform. When Windows teardown hits `os.killpg`, the script also prints those requirement ids as UNVERIFIED; that non-zero exit is not a pass. A missing `uvx` exits 2, and a missing `dist/cli.js` exits 1. The `test` job writes the VERDICT, the MANDATORY passed/failed/skipped counts, the total, and any UNVERIFIED line to the GitHub Actions job summary.
 
 ## Week 1 acceptance
 - [ ] `tigercat acp` passes acp-tck MANDATORY requirements where the harness can run. A Windows `os.killpg` teardown failure fails the TCK step. The ids are listed as UNVERIFIED and are not passes.
