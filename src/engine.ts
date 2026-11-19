@@ -102,6 +102,7 @@ export class Engine {
     this.brain =
       options.brain ??
       new ScriptedRouter(options.config.defaultWorkerRuntime);
+    this.secrets.noteProcessEnv(process.env);
     for (const runtime of options.config.runtimes) this.secrets.noteEnv(runtime.env);
     this.mcpLaunch = options.mcpLaunch;
     this.workspaceRoot = options.workspaceRoot ?? process.cwd();
@@ -124,6 +125,7 @@ export class Engine {
 
   attachIpc(ipc: NonNullable<Engine["ipc"]>): void {
     this.ipc = ipc;
+    this.secrets.noteEnv({ TIGERCAT_IPC_TOKEN: ipc.token });
   }
 
   useBrain(brain: RouterBrain): void {

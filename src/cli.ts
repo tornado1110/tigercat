@@ -17,6 +17,7 @@ import { TigerError, isTigerError } from "./errors.js";
 import { serveMcp } from "./mcp.js";
 import { listenForTools } from "./ipc.js";
 import { listRuntimes, planRuntimeTest, type ListedRuntime, type RuntimeTestPlan } from "./builtins.js";
+import { redactText } from "./redact.js";
 import { ProcessRuntimeFactory } from "./runtime.js";
 import { SqliteStore } from "./store.js";
 import type { PermissionPolicy, RuntimeConfig } from "./types.js";
@@ -80,7 +81,7 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
     if (command === "runtime") return await cmdRuntime(positionals.slice(1), values, io);
     return await cmdTool(command, positionals.slice(1), values, io);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = redactText(error instanceof Error ? error.message : String(error));
     if (values.json) io.stdout(`${JSON.stringify({ ok: false, error: message, code: isTigerError(error) ? error.code : "error" })}\n`);
     else io.stderr(`${message}\n`);
     return error instanceof TigerError && error.code === "usage" ? 2 : 1;
@@ -222,7 +223,7 @@ async function testRuntime(plan: RuntimeTestPlan): Promise<Record<string, unknow
         : plan.message,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = redactText(error instanceof Error ? error.message : String(error));
     return {
       ...base,
       ok: false,
@@ -347,7 +348,7 @@ if (entryArg && import.meta.url === pathToFileURL(entryArg).href) {
       if (typeof code === "number") process.exitCode = code;
     },
     (error) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = redactText(error instanceof Error ? error.message : String(error));
       console.error(message);
       process.exitCode = 1;
     },
@@ -361,6 +362,7 @@ A Super-agent router for coding agents.
 Usage:
   tigercat acp [--config file]
   tigercat runtime add <name> --command <cmd> [--arg a] [--env K=V] [--tag t] [--permission ask|auto|deny]
+    --env is written to config.toml in plaintext. Do not put API keys there.
   tigercat runtime list
   tigercat runtime remove <name>
   tigercat runtime test <name>
