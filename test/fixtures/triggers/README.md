@@ -1,120 +1,114 @@
 # Trigger stream fixtures
 
-Replay inputs for TigerCat's trigger harness. Each file is JSONL: one Trigger
-object per line, UTF-8, no blank lines. These files are annotations and
-scripts, not test results.
+JSONL scripts for the trigger harness. One Trigger per line, UTF-8, no blank
+lines. These files are data, not test results. Nothing in this directory is
+loaded by `npm test`.
 
-The synthetic mix (`node generate.mjs --seed 1 --count 300 --work 20`) mirrors
-the scale of DeepSeek's Super-agent ablation: about 300 messages, 20 real work
-requests, and the rest chatter, follow-ups, stop requests, and CI noise.
+Admission labels come from `examples/rules.default.toml` version
+`2026-11-18.1`. That file is the ignore policy. Fixture text and `expect`
+are adjusted to match it. The rules file is not widened so a fixture can pass.
 
-## Schema
+## Layout
 
-| Field      | Type                         | Required | Meaning |
-|------------|------------------------------|----------|---------|
-| `id`       | string                       | yes      | Stable unique id (`trg_…`). |
-| `ts`       | string (ISO 8601 UTC)        | yes      | Event time, e.g. `2026-03-02T01:00:00.000Z`. |
-| `source`   | `feishu` \| `github`         | yes      | Channel. |
-| `kind`     | string                       | yes      | `im.message`, `pr.opened`, `pr.comment`, `ci.result`. |
-| `thread_id`| string                       | yes      | Consecutive events that share a thread_id form a Thread. Feishu: `feishu:<group>:<topic>`. GitHub: `github:<owner>/<repo>#<pr>`. |
-| `author`   | string                       | yes      | Sender login or display id. |
-| `is_bot`   | boolean                      | yes      | True for bots (CI, echoes). |
-| `text`     | string                       | yes      | Message body or a short CI summary. |
-| `reply_to` | string \| null               | yes      | Parent trigger id, or `null`. |
-| `expect`   | object                       | yes      | Assertion labels. Not part of the production Trigger. |
+| Path | Role |
+|------|------|
+| `m0/` | Current behavior. Replay with the harness settings below must produce zero `mismatches()`. |
+| `specs/m1/` | M1 specifications. The scripted brain subscribes only the home thread passed to `spawn`. These files describe cross-thread subscriptions that current replay does not perform. |
+| `specs/lifecycle/` | Lifecycle specification. Abnormal exit and `kill` unsubscribe every Thread. Current replay cannot execute that exit. |
+| `specs/batching/` | Batching specification. `mismatches()` does not read `batch`, and `replayTriggers` settles after every event. |
 
-Optional production-shaped fields may appear later; fixtures stay this small
-on purpose. Group is derived from `thread_id` (`feishu:eng:cli` → `eng`).
+## M0 replay settings
 
-## `expect`
-
-| Field        | Type                         | Meaning |
-|--------------|------------------------------|---------|
-| `filter`     | `ignore` \| `candidate` \| `respond` | Level-1 deterministic rule outcome. `ignore` is dropped with zero LLM calls. `candidate` is forwarded to the Router to judge. `respond` must be handled. |
-| `route`      | `router` \| `worker:<id>` \| `worker:<id>`[] \| `null` | Where a non-ignored event is delivered. `null` on `ignore`. `worker:<id>` names the Worker by the thread it was spawned on (its home thread). An array lists every Worker that must receive the event. |
-| `spawns`     | boolean                      | `true` only when this event must start a new Worker. Never true for `ignore` or `candidate` (fixtures do not invent a Router LLM decision). |
-
-Optional `expect` keys, used only when the scenario needs them:
-
-| Field        | Type           | Meaning |
-|--------------|----------------|---------|
-| `subscribe`  | string[]       | On a spawn: Threads the new Worker subscribes to (always includes the home thread). Later events in those Threads go to the Worker, not the Router. |
-| `interrupt`  | boolean        | User asked to stop the Worker's current turn (subscriptions kept). |
-| `unsubscribe_all` | string     | On `worker.exited` events: home thread of the Worker that was killed or crashed; it drops every subscription. |
-| `batch`      | string         | Events that arrive while the Router is mid-turn and must be merged into the next Router turn. Same id = same batch. Ignored events are not batched. |
-| `fanout`     | number         | How many subscribed Workers must receive this event (`route` is then an array). |
-
-## Fixture filter policy
-
-This is a convention for these files so assertions are deterministic. It is
-not a substitute for a product spec. Rules run in order and stop at the first
-match.
-
-1. **Allowlist.** `thread_id` must start with `feishu:eng:` or
-   `github:tornado1110/tigercat#`. Anything else → `ignore`.
-2. **Bot chat.** `is_bot` and `kind` is `im.message` or `pr.comment` → `ignore`.
-3. **CI.** `kind` is `ci.result`:
-   - Failure (`fail` / `failed` / `failure` in `text`, case-insensitive) on an
-     allowlisted PR: `respond` if a Worker already subscribes to that Thread,
-     otherwise `candidate`.
-   - Success, skipped, or cancelled CI → `ignore`.
-4. **Stop.** Text matches a stop phrase (`please stop this task`, `cancel this
-   worker`, `interrupt this, I will finish it myself`, `stop, do not continue`)
-   and a Worker is subscribed to the Thread → `respond`, `route` to that
-   Worker, `interrupt: true`. Interrupt only stops the current turn: the Worker keeps
-   every subscription, so a follow-up like "stop, do X instead" in the same
-   Thread goes straight to the same Worker (product spec, issue #7).
-   Only `kill` or an abnormal Worker exit unsubscribes it from all its Threads;
-   later events on those Threads go back to the Router (see `kill-worker.jsonl`).
-5. **Explicit work.** `@tigercat`, or an imperative task verb (`please add|fix|
-   implement|refactor|write|change|update|remove|delete|investigate|document|
-   run|create|replace|move|rename|set|keep…`, including those verbs at the
-   start of the text) → `respond`. If no Worker is subscribed to this Thread,
-   `route` is `router` and `spawns` is `true`. If one already is, this is a
-   follow-up: `route` is that Worker and `spawns` is `false`.
-6. **Chatter.** Greetings, thanks, acks, emoji, `ok`, `+1`, `lol`, lunch or
-   other social talk → `ignore`, even on a subscribed Thread (they must not
-   spawn, and they must not cost an LLM call).
-7. **Subscribed clarification.** Any other human message on a Thread that
-   already has a Worker → `respond`, `route` to that Worker, `spawns` false.
-   This covers clarifications that are not imperative ("The typo is in the
-   install section, not the title.").
-8. **Otherwise** → `candidate`, `route` is `router`, `spawns` is `false`.
-   Fixtures do not invent a Router LLM decision for candidates.
-
-`pr.opened` without an explicit task body falls through to `candidate`.
-
-## Routing and cross-channel identity
-
-A Worker is identified by its home `thread_id` (the Thread of the spawn
-event). `expect.subscribe` may list additional Threads (a PR mentioned in a
-Feishu task, for example). A later PR comment is then routed as
-`worker:<home thread_id>`, not as a new Router decision.
-
-When two Workers subscribe to the same Thread, a later event on that Thread
-lists both homes in `route` and sets `fanout` to 2.
-
-`spawn` itself is not represented here; the harness asserts that TigerCat
-returns "started" immediately and that `expect.spawns` matches Worker
-creation.
-
-## Files
-
-| File | What it exercises |
-|------|-------------------|
-| `chatter-only.jsonl` | Everything is `ignore`. Zero spawns, zero LLM calls. |
-| `single-task.jsonl` | One explicit request spawns a Worker; later task follow-ups in that Thread go to the Worker. |
-| `cross-channel.jsonl` | Task starts in Feishu and mentions a PR; a later PR comment that changes the decision reaches the same Worker. |
-| `burst-batching.jsonl` | Several non-ignored Triggers arrive within ~2s while the Router is mid-turn and must share one `batch` id. |
-| `stop-request.jsonl` | User stops a running task in the same Thread; the stop goes to the Worker. |
-| `shared-pr-two-workers.jsonl` | Two Workers, started from two Feishu Threads, both subscribe to one PR; a later PR comment fans out to both. |
-| `generate.mjs` | Seeded generator. No dependencies. Stdout is JSONL; the count summary goes to stderr. |
-
-Regenerate the default synthetic stream:
-
-```bash
-node generate.mjs --seed 1 --count 300 --work 20 > stream-seed1.jsonl
+```js
+const harness = await startHarness({ durationMs: 0 });
+const observations = await replayTriggers(harness.engine, harness.clock, triggers);
+// mismatches(observation) is empty for every row
 ```
 
-`stream-seed1.jsonl` is the checked-in output of that command. Do not edit it
-by hand.
+`startHarness({ durationMs: 0 })` uses the default config: filter
+`2026-11-18.1`, `maxConcurrency` 4, idle timeout 10 minutes, in-memory
+sqlite, and `FakeTimeRuntimeFactory`. The fake turn timer is already due.
+The next `replayTriggers` clock advance completes it, the Worker becomes
+`idle`, and the subscription stays. `idle` is still an active subscriber, so
+a later message on that home thread is delivered to the same Worker.
+Interrupt on an idle Worker still reports `interrupt: true` from the stop
+rule and does not drop the subscription.
+
+Do not replay M0 with the default `durationMs` of 30 minutes. That turn
+outlives the 10-minute idle timeout, the Worker becomes `stalled`, and
+`activeSubscriptions` skips stalled sessions. Later rows that assume a live
+subscription then disagree with the engine. The 30-minute default is not the
+M0 setting.
+
+`npm test` does not run this replay.
+
+## What `mismatches()` checks
+
+From `test/harness/replay.ts`, for each row:
+
+| `expect` field | Checked? |
+|----------------|----------|
+| `filter` | yes |
+| `route` | yes |
+| `spawns` | yes |
+| `subscribe` | yes, on a spawn, against the threads actually stored |
+| `interrupt` | only when the key is present |
+| `fanout` | only when the key is present |
+| `batch` | no |
+| `unsubscribe_all` | no. Not part of `FixtureExpect`. The parser keeps the key and the harness ignores it. |
+
+M0 files set `interrupt` on every row the stop rule matches, including
+`trg_stop_05` (`stop, do .+ instead`). They do not use `batch` or
+`unsubscribe_all`. Spawn `subscribe` lists only the home thread.
+
+## Policy used for labels
+
+Same order as the versioned rules. First match wins.
+
+1. Allowlist. `thread_id` must start with `feishu:eng:` or `github:tornado1110/tigercat#`. Anything else is `ignore`.
+2. Bot chat. `is_bot` and kind `im.message` or `pr.comment` is `ignore`.
+3. CI. Kind `ci.result`: failure text (`fail`, `failed`, or `failure`) is `respond` when a Worker is subscribed, otherwise `candidate`. Other CI is `ignore`.
+4. Stop. The versioned pattern, and a subscribed Worker: `respond`, route to that Worker, `interrupt: true`. The pattern includes `please stop this task`, `cancel this worker`, `interrupt this, I will finish it myself`, `stop, do not continue`, and `stop, do .+ instead`. Interrupt cancels the turn and keeps every subscription.
+5. Explicit work. `@tigercat`, or `please` followed directly by a task verb, or that verb at the start of the text. `please also <verb>` does not match. Unsubscribed: `route` `router`, `spawns` true. Subscribed: route to that Worker, `spawns` false.
+6. Chatter. Whole message only, anchored, from the versioned regex (`morning`, `thanks`, `ok`, `lol`, `+1`, and the other listed words, plus a few emoji). `Morning all`, `coffee break`, `OK thanks`, `sg`, `got it`, `sounds good`, and similar lines do not match. On an allowlisted thread with no subscriber they are `candidate`.
+7. Subscribed clarification. Any other message on a thread that already has a Worker: `respond`, route to that Worker, `spawns` false.
+8. Otherwise `candidate`, `route` `router`, `spawns` false.
+
+`kill` or an abnormal Worker exit is what drops subscriptions. A trigger row does not. See `specs/lifecycle/`.
+
+## M0 files
+
+| File | What zero `mismatches()` means |
+|------|--------------------------------|
+| `chatter-only.jsonl` | Every row is `ignore` under `2026-11-18.1` (allowlist, bot chat, non-failure CI, or whole-message chatter). Zero spawns. |
+| `single-task.jsonl` | One home-thread spawn. Later messages on that thread reach the Worker. |
+| `stop-request.jsonl` | Both stop lines set `interrupt: true` and keep the subscription. `trg_stop_05` matches `stop, do .+ instead`. |
+| `four-tasks.jsonl` | Four home-thread spawns, plus ignore and candidate rows. No `batch` key. This does not claim the router merged a turn. |
+| `generate.mjs` | Seeded generator. Stdout is JSONL. The count summary goes to stderr. |
+| `stream-seed1.jsonl` | Checked-in output of the command below. Do not edit it by hand. |
+
+```bash
+node test/fixtures/triggers/m0/generate.mjs --seed 1 --count 300 --work 20 > test/fixtures/triggers/m0/stream-seed1.jsonl
+```
+
+Counts for `--count 300 --work 20` are exact roles, not filter outcomes:
+
+- 20 work requests, each spawning one Worker on its home thread only
+- stops = min(work, max(1, round(work * 0.25))) = 5, each with `interrupt: true`
+- follow-ups = 40, all on the home thread of their work item
+- CI rows = round(count * 0.12) = 36
+- social-noise rows = the remaining 199
+
+The social-noise role is not the ignore outcome. A line is `ignore` only when `2026-11-18.1` says so. `Morning all` and `coffee break` on an allowlisted thread are `candidate`.
+
+## Specs that are not M0
+
+Replaying these with `mismatches()` fails. That failure is the current product boundary. Their labels were not rewritten to match the failing path.
+
+`specs/m1/cross-channel.jsonl`. A Feishu task also subscribes `github:tornado1110/tigercat#87`. A later PR comment is specified to reach that same Worker. The scripted brain does not subscribe the PR thread.
+
+`specs/m1/shared-pr-two-workers.jsonl`. Two Feishu Workers both subscribe one PR. A later PR comment and a CI failure are specified to fan out to both. The scripted brain subscribes only each home thread, and `fanout` is not produced.
+
+`specs/lifecycle/kill-worker.jsonl`. After an abnormal exit the Worker drops every subscription, and the next explicit request spawns again. The row `trg_kill_03` is `kind: worker.exited` with `unsubscribe_all`. Replay ingests that row as an ordinary trigger. It does not exit the process, and `mismatches()` does not read `unsubscribe_all`. The file keeps the unsubscribe semantics. It does not relabel the exit as `respond` just because that is what a normal ingest does today.
+
+`specs/batching/burst-batching.jsonl`. Several non-ignored triggers share a `batch` id, and a fifth spawn arrives while four Workers would still be in their turn. `mismatches()` does not read `batch`. `replayTriggers` calls `settle()` after every event, so the router is idle before the next row. Default `maxConcurrency` is 4. The fifth spawn is part of the specification, not an M0 assertion.
