@@ -16,6 +16,7 @@ import { Engine } from "./engine.js";
 import { TigerError, isTigerError } from "./errors.js";
 import { serveMcp } from "./mcp.js";
 import { listenForTools } from "./ipc.js";
+import { listRuntimes, planRuntimeTest, type ListedRuntime, type RuntimeTestPlan } from "./builtins.js";
 import { ProcessRuntimeFactory } from "./runtime.js";
 import { SqliteStore } from "./store.js";
 import type { PermissionPolicy, RuntimeConfig } from "./types.js";
@@ -139,15 +140,8 @@ async function cmdRuntime(
   const file = configPath(typeof values.config === "string" ? values.config : undefined);
   const config = loadConfig(file);
   if (sub === "list") {
-    const payload = config.runtimes.map((runtime) => ({
-      name: runtime.name,
-      command: runtime.command,
-      args: runtime.args,
-      tags: runtime.tags,
-      permission: runtime.permission,
-      description: runtime.description,
-    }));
-    io.stdout(values.json ? `${JSON.stringify(payload)}\n` : formatRuntimes(config.runtimes));
+    const payload = listRuntimes(config);
+    io.stdout(values.json ? `${JSON.stringify(payload)}\n` : formatRuntimes(payload));
     return 0;
   }
   if (sub === "add") {
@@ -177,19 +171,27 @@ async function cmdRuntime(
   }
   if (sub === "test") {
     const name = args[1];
-    const runtime = config.runtimes.find((entry) => entry.name === name);
-    if (!runtime) throw new TigerError("unknown_runtime", `unknown runtime ${name ?? ""}`);
-    const report = await testRuntime(runtime);
+    if (!name) throw new TigerError("usage", "usage: tigercat runtime test <name>");
+    const plan = planRuntimeTest(config, name);
+    const report = await testRuntime(plan);
     io.stdout(`${JSON.stringify(report)}\n`);
     return report.ok ? 0 : 1;
   }
   throw new TigerError("usage", "usage: tigercat runtime add|list|remove|test");
 }
 
-async function testRuntime(runtime: RuntimeConfig): Promise<Record<string, unknown>> {
+async function testRuntime(plan: RuntimeTestPlan): Promise<Record<string, unknown>> {
   const factory = new ProcessRuntimeFactory({ handshakeTimeoutMs: 8_000 });
+  const base = {
+    runtime: plan.runtime.name,
+    mode: plan.mode,
+    vendorFound: plan.vendorFound,
+    vendorExecuted: false,
+    adapter: plan.adapter,
+    manual: plan.manual || undefined,
+  };
   try {
-    const handle = await factory.launch(runtime, {
+    const handle = await factory.launch(plan.launch, {
       cwd: process.cwd(),
       role: "worker",
       onUpdate: () => undefined,
@@ -205,18 +207,27 @@ async function testRuntime(runtime: RuntimeConfig): Promise<Record<string, unkno
       new Promise<never>((_, reject) => setTimeout(() => reject(new TigerError("timeout", "prompt timed out")), 8_000)),
     ]);
     await handle.kill();
+    const vendorExecuted = plan.mode === "adapter";
     return {
+      ...base,
       ok: result.stopReason === "end_turn" || result.stopReason === "cancelled" || result.stopReason === "refusal",
       protocolVersion: acp.PROTOCOL_VERSION,
       stopReason: result.stopReason,
       degraded: ["loadSession"],
+      acpSessionId: handle.acpSessionId ?? null,
+      vendorExecuted,
+      preview: plan.mode === "dry-run" ? result.text.slice(0, 200) : undefined,
+      message: vendorExecuted
+        ? `${plan.adapter?.package}@${plan.adapter?.version} completed initialize, session/new, and session/prompt.`
+        : plan.message,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
+      ...base,
       ok: false,
       reason: isTigerError(error) ? error.code : "bad_runtime",
-      message,
+      message: plan.mode === "dry-run" ? `${message} ${plan.message}` : message,
     };
   }
 }
@@ -318,10 +329,14 @@ function permissionOf(value: unknown): PermissionPolicy {
   return "ask";
 }
 
-function formatRuntimes(runtimes: RuntimeConfig[]): string {
+function formatRuntimes(runtimes: ListedRuntime[]): string {
   if (runtimes.length === 0) return "(no runtimes)\n";
   return runtimes
-    .map((runtime) => `${runtime.name}\t${runtime.command} ${runtime.args.join(" ")}\t${runtime.permission}`)
+    .map((runtime) => {
+      const kind = runtime.overridden ? "override" : runtime.builtin ? "builtin" : "config";
+      const mode = runtime.testMode ? `\t${runtime.testMode}` : "";
+      return `${runtime.name}\t${runtime.command} ${runtime.args.join(" ")}\t${runtime.permission}\t${kind}${mode}`;
+    })
     .join("\n") + "\n";
 }
 
@@ -346,9 +361,16 @@ A Super-agent router for coding agents.
 Usage:
   tigercat acp [--config file]
   tigercat runtime add <name> --command <cmd> [--arg a] [--env K=V] [--tag t] [--permission ask|auto|deny]
-  tigercat runtime list|remove|test
+  tigercat runtime list
+  tigercat runtime remove <name>
+  tigercat runtime test <name>
   tigercat spawn --runtime <name> --thread <id> <task>
   tigercat list|send|read|interrupt|wait|kill|subscribe|unsubscribe
+
+Built-in workers: claude-code, codex.
+When claude or codex is absent, runtime test handshakes a local dry-run agent.
+Real run: TIGERCAT_CLAUDE_BIN=/path/to/claude tigercat runtime test claude-code
+          TIGERCAT_CODEX_BIN=/path/to/codex tigercat runtime test codex
 
 Flags:
   --json     Stable JSON on stdout
