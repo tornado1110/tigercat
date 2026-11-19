@@ -1,7 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { loadConfig } from "../../src/config.js";
 import { TigerError } from "../../src/errors.js";
 import { redactText, SecretRegistry } from "../../src/redact.js";
 import { ProcessRuntimeFactory } from "../../src/runtime.js";
@@ -106,5 +108,18 @@ describe("runtime stderr", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("example config", () => {
+  it("loads without credentials", () => {
+    const file = fileURLToPath(new URL("../../examples/config.example.toml", import.meta.url));
+    const config = loadConfig(file);
+    const encoded = JSON.stringify(config);
+    expect(config.coordinatorRuntime).toBeUndefined();
+    expect(config.defaultWorkerRuntime).toBe("claude-code");
+    expect(config.maxConcurrency).toBe(4);
+    expect(config.runtimes).toEqual([]);
+    expect(encoded).not.toMatch(/sk-|Bearer |api_key|DEEPSEEK|ANTHROPIC_API_KEY|OPENAI_API_KEY/i);
   });
 });

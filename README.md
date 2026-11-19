@@ -56,7 +56,7 @@ TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
 
 `runtime add` with the same name overrides a built-in. Either name can be `coordinator_runtime`. The Router tool list is still only spawn, list, send, read, interrupt, wait, kill, subscribe, and unsubscribe.
 
-Point `coordinator_runtime` in `~/.tigercat/config.toml` at the Router runtime. The admission policy is `examples/rules.default.toml`, currently version `2026-11-18.1`. Explicit whole-message chatter (`thanks`, `lol`, `morning`) is `ignore` and makes zero Router calls. Unknown natural language such as `Morning all` or `coffee break` is `candidate` when nobody is subscribed, and a clarification on an already subscribed Thread is `respond` to that Worker. Candidates are not rewritten to `ignore`.
+`coordinator_runtime` names an ACP agent you installed yourself. This repository does not ship that program. Leave the field unset to keep the scripted brain; see [docs/operations.md](docs/operations.md). The admission policy is `examples/rules.default.toml`, currently version `2026-11-18.1`. Explicit whole-message chatter (`thanks`, `lol`, `morning`) is `ignore` and makes zero Router calls. Unknown natural language such as `Morning all` or `coffee break` is `candidate` when nobody is subscribed, and a clarification on an already subscribed Thread is `respond` to that Worker. Candidates are not rewritten to `ignore`.
 
 ```bash
 tigercat acp
@@ -73,6 +73,15 @@ args = ["acp"]
 ```
 
 Pass a Thread id on the prompt `_meta.thread_id` when the host knows the topic or pull request. Without one, the upstream session is its own Thread (`acp:<sessionId>`).
+
+## Operations
+
+Foreground start, stop, and restart, credential separation, and the scripted
+demo config are in [docs/operations.md](docs/operations.md).
+[examples/config.example.toml](examples/config.example.toml) leaves
+`coordinator_runtime` unset. It is not a model Router, and this repository
+does not ship one. There is no `start` or `stop` subcommand. `runtime add
+--env` writes plaintext into `config.toml`; do not put API keys there.
 
 ## What week 1 does
 
