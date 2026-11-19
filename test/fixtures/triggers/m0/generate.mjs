@@ -8,7 +8,10 @@
  * Stdout is JSONL only. A composition summary is written to stderr.
  * No dependencies; plain Node. Seeded with mulberry32.
  *
- * Schema and filter policy: README.md in this directory.
+ * Labels follow examples/rules.default.toml version 2026-11-18.1.
+ * This generator does not invent a wider ignore list. A spawn subscribes
+ * only its home thread, which is what the scripted Router brain does.
+ * Schema notes: ../README.md
  */
 "use strict";
 
@@ -28,7 +31,8 @@ Counts are exact. Composition (when there is room):
   ciNoise    = min(remaining, round(count * 0.12))
   chatter    = the rest
 
-The filter policy used to label \`expect\` is documented in README.md.
+\`expect\` labels are the versioned default rules (2026-11-18.1).
+Each spawn subscribes only its home thread.
 `;
 
 const START_TS = Date.parse("2026-03-02T01:00:00.000Z");
@@ -85,6 +89,8 @@ const STOP_TEXTS = [
   "stop, do not continue",
 ];
 
+// Social-noise pool. Filter outcome is decided by POLICY_VERSION, not by
+// membership in this list. "Morning all" and "coffee break" are not ignore.
 const CHATTER_TEXTS = [
   "morning",
   "Morning all",
@@ -107,15 +113,27 @@ const CHATTER_TEXTS = [
   "coffee break",
 ];
 
-const TASK_VERBS =
-  "add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep";
-const RE_AT = /@tigercat\b/i;
-const RE_PLEASE_VERB = new RegExp(String.raw`\bplease\s+(?:also\s+)?(?:${TASK_VERBS})\b`, "i");
-const RE_START_VERB = new RegExp(String.raw`^(?:${TASK_VERBS})\b`, "i");
-const RE_CI_FAIL = /\bfail(?:ed|ure)?\b/i;
-const RE_CHATTER =
-  /^(?:morning(?:\s+all)?|ok(?:\s+thanks)?|thanks|thank you|\+1|lol|haha|nice|sg|got it|sounds good|brb|see you tomorrow|coffee break|have a good evening\.?|anyone around for lunch\?|i am in, 12:30 works\.|what'?s for lunch\?|i am online\.|thanks for the contribution!|working on it\.)$/i;
-const STOP_SET = new Set(STOP_TEXTS.map((s) => s.toLowerCase()));
+// Copied from examples/rules.default.toml version 2026-11-18.1.
+// A leading (?i) is a flag, matching src/filter.ts. Do not widen these.
+const POLICY_VERSION = "2026-11-18.1";
+const CHATTER_PATTERN =
+  "(?i)^(?:morning|good morning|good night|hello|hi|hey|thanks|thank you|thx|ty|ok|okay|\\+1|lol|lgtm|nice|cool|haha|wow|lunch|brb|gtg)[.!\\s]*$|^(?:👍|🎉|👋|😂|🙏|✅|❤️)+$";
+const STOP_PATTERN =
+  "(?i)please stop this task|cancel this worker|interrupt this, I will finish it myself|stop, do not continue|stop, do .+ instead";
+const EXPLICIT_PATTERN =
+  "(?i)@tigercat|\\bplease\\s+(add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep)\\b|^(?:please\\s+)?(add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep)\\b";
+const CI_FAIL_PATTERN = "(?i)fail|failed|failure";
+
+function testPolicyRegex(pattern, text) {
+  let flags = "";
+  let body = pattern;
+  const inline = /^\(\?([a-z]+)\)/.exec(pattern);
+  if (inline) {
+    flags = inline[1];
+    body = pattern.slice(inline[0].length);
+  }
+  return new RegExp(body, flags).test(text);
+}
 
 function parseArgs(argv) {
   const out = { seed: 1, count: 300, work: 20, help: false };
@@ -188,19 +206,51 @@ function isAllowlisted(threadId) {
 }
 
 function isStopText(text) {
-  return STOP_SET.has(String(text).toLowerCase());
+  return testPolicyRegex(STOP_PATTERN, text);
 }
 
 function isExplicitWork(text) {
-  return RE_AT.test(text) || RE_PLEASE_VERB.test(text) || RE_START_VERB.test(text);
+  return testPolicyRegex(EXPLICIT_PATTERN, text);
 }
 
 function isChatterText(text) {
-  return RE_CHATTER.test(String(text).trim());
+  return testPolicyRegex(CHATTER_PATTERN, text);
 }
 
 function isCiFailure(text) {
-  return RE_CI_FAIL.test(text);
+  return testPolicyRegex(CI_FAIL_PATTERN, text);
+}
+
+function assertPolicySamples() {
+  const chatter = [
+    ["morning", true],
+    ["Thanks!", true],
+    ["ok", true],
+    ["Morning all", false],
+    ["coffee break", false],
+    ["OK thanks", false],
+    ["sg", false],
+    ["got it", false],
+    ["sounds good", false],
+    ["see you tomorrow", false],
+    ["Have a good evening.", false],
+    ["anyone around for lunch?", false],
+    ["I am in, 12:30 works.", false],
+  ];
+  for (const [text, expected] of chatter) {
+    if (isChatterText(text) !== expected) {
+      throw new Error(`chatter label drifted from ${POLICY_VERSION}: ${JSON.stringify(text)}`);
+    }
+  }
+  if (!isStopText("Stop, do only the seq regression test instead and leave the refactor to me.")) {
+    throw new Error(`stop label drifted from ${POLICY_VERSION}`);
+  }
+  if (isExplicitWork("Please also document the default next to the flag in the README.")) {
+    throw new Error(`explicit-work must not treat "please also" as a verb (${POLICY_VERSION})`);
+  }
+  if (!isExplicitWork("Please add a --json flag")) {
+    throw new Error(`explicit-work label drifted from ${POLICY_VERSION}`);
+  }
 }
 
 /**
@@ -284,35 +334,20 @@ function buildEvents(rng, count, work) {
 
   // Home threads for each work item: even index Feishu, odd index GitHub.
   const workItems = [];
-  const feishuHomes = [];
   for (let i = 0; i < work; i++) {
     const feishu = i % 2 === 0;
     const home = feishu
       ? `feishu:eng:task-${pad(i + 1, 2)}`
       : `github:tornado1110/tigercat#${200 + i}`;
-    const item = {
+    workItems.push({
       index: i,
       home,
       source: feishu ? "feishu" : "github",
       kind: feishu ? "im.message" : "pr.comment",
+      // Scripted brain passes only this thread to spawn. Extra threads are M1.
       subscribe: [home],
       text: WORK_TEXTS[i % WORK_TEXTS.length] + (i >= WORK_TEXTS.length ? ` (task ${i + 1})` : ""),
-    };
-    if (feishu) feishuHomes.push(item);
-    workItems.push(item);
-  }
-
-  // First two Feishu work items share PR #128 (many-to-many).
-  // The next Feishu work item, if any, gets a private PR for a simple cross-channel follow-up.
-  const SHARED_PR = "github:tornado1110/tigercat#128";
-  if (feishuHomes.length >= 2) {
-    feishuHomes[0].subscribe.push(SHARED_PR);
-    feishuHomes[1].subscribe.push(SHARED_PR);
-  }
-  if (feishuHomes.length >= 3) {
-    feishuHomes[2].subscribe.push("github:tornado1110/tigercat#87");
-  } else if (feishuHomes.length === 1) {
-    feishuHomes[0].subscribe.push("github:tornado1110/tigercat#87");
+    });
   }
 
   const key = () => rng();
@@ -336,34 +371,21 @@ function buildEvents(rng, count, work) {
     });
   }
 
-  // Follow-ups: round-robin across work items. Some are cross-channel PR comments.
+  // Follow-ups stay on the home thread. Cross-thread delivery is an M1 spec.
   const followTargets = [];
   for (let i = 0; i < comp.followUps; i++) {
     followTargets.push(workItems[i % Math.max(workItems.length, 1)]);
   }
   for (let i = 0; i < followTargets.length; i++) {
     const item = followTargets[i];
-    const extraThreads = item.subscribe.filter((t) => t !== item.home);
-    // Every third follow-up on a cross-subscribed Worker arrives on the extra Thread.
-    // The first follow-up is reserved for the shared PR when that pair exists.
-    const forceShared = i === 0 && feishuHomes.length >= 2;
-    const useExtra = forceShared || (extraThreads.length > 0 && i % 3 === 0);
-    const threadId = forceShared
-      ? SHARED_PR
-      : useExtra
-        ? extraThreads[0]
-        : item.home;
-    const source = threadId.startsWith("github:") ? "github" : "feishu";
-    const kind = source === "github" ? "pr.comment" : "im.message";
     events.push({
       role: "followUp",
       workIndex: item.index,
       afterWork: item.index,
-      afterWorks: forceShared ? [feishuHomes[0].index, feishuHomes[1].index] : undefined,
       sort: 1, // rewritten below
-      source,
-      kind,
-      thread_id: threadId,
+      source: item.source,
+      kind: item.kind,
+      thread_id: item.home,
       author: pick(rng, AUTHORS),
       is_bot: false,
       text: FOLLOWUP_TEXTS[i % FOLLOWUP_TEXTS.length],
@@ -371,9 +393,8 @@ function buildEvents(rng, count, work) {
     });
   }
 
-  // Stops: last `stops` work items, in the home thread, after the spawn.
-  // Skipping the earliest items keeps the shared-PR pair (the first two
-  // Feishu homes) alive so a later event on that PR can fan out to both.
+  // Stops: last `stops` work items, on the home thread, after the spawn.
+  // Interrupt keeps the subscription; it does not free the thread for a new spawn.
   for (let i = 0; i < comp.stops; i++) {
     const item = workItems[workItems.length - 1 - i];
     events.push({
@@ -584,6 +605,7 @@ function main(argv) {
     process.stdout.write(USAGE);
     return;
   }
+  assertPolicySamples();
   const rng = mulberry32(args.seed);
   const { events, comp } = buildEvents(rng, args.count, args.work);
   assignTimestamps(rng, events);
@@ -605,6 +627,15 @@ function main(argv) {
   }
   if (stats.interrupt !== comp.stops) {
     throw new Error(`interrupt mismatch: got ${stats.interrupt} labeled stops, expected ${comp.stops}`);
+  }
+  for (const rec of records) {
+    const subscribed = rec.expect.subscribe;
+    if (subscribed && (subscribed.length !== 1 || subscribed[0] !== rec.thread_id)) {
+      throw new Error(`${rec.id} subscribes outside its home thread`);
+    }
+    if (Array.isArray(rec.expect.route)) {
+      throw new Error(`${rec.id} fans out; the M0 stream has one home thread per Worker`);
+    }
   }
 
   for (const rec of records) {
