@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 702dbb9cfea09b7d1af2d9db66b31dc67bb23a7c -->
+<!-- i18n-source: README.md @ f32cfb673524b693f5d707f1ac7ff5ea08ab9558 -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat
@@ -128,4 +128,4 @@ Trigger は順序付きのルールエンジンで入場したあと、次のよ
 npm test
 ```
 
-`npm run test:tck` は [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` を `tigercat acp` に対して実行します（[uv](https://docs.astral.sh/uv/) が必要です）。Windows では、このピン留めした版が自分の teardown で `os.killpg` を呼びます。このステップが失敗するのは、その teardown が `os.killpg` に当たったときだけです。スクリプトは該当する requirement id を **UNVERIFIED** と印字し、harness の終了ステータス（非ゼロ）で終了します。当たらなければ、このステップは 0 で終了します。killpg の teardown 失敗は合格ではありません。CI は VERDICT、MANDATORY の passed/failed/skipped の件数、合計、そして UNVERIFIED 行があればそれを job summary に書き出します。リプレイの fixture はテストエンジニアの JSONL schema を使います。harness は `test/harness/` にあります。Fixture ファイルは QA が所有しており、ラベルの差を消すために、ここで編集することはありません。
+`npm run test:tck` は [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` を `tigercat acp` に対して実行します（[uv](https://docs.astral.sh/uv/) が必要です）。harness が終わったあと、スクリプトはその終了ステータスで終了し、`os.killpg` を合格にはしません。どのプラットフォームでも、MANDATORY の失敗は非ゼロ終了です。`uvx` が見つからないときの終了コードは 2、`dist/cli.js` が無いときは 1 です。Windows では、このピン留めした版が自分の teardown で `os.killpg` を呼びます。当たったときは、スクリプトが該当する requirement id を **UNVERIFIED** と追加で印字し、このステップは非ゼロで終了します。それは合格ではありません。CI は VERDICT、MANDATORY の passed/failed/skipped の件数、合計、そして UNVERIFIED 行があればそれを job summary に書き出します。リプレイの fixture はテストエンジニアの JSONL schema を使います。harness は `test/harness/` にあります。Fixture ファイルは QA が所有しており、ラベルの差を消すために、ここで編集することはありません。
