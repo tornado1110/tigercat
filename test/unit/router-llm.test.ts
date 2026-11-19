@@ -141,9 +141,10 @@ describe("DeepSeek chat-completions Router (local fake, not a live provider)", (
     expect(tools.map((tool) => tool.function.name)).toEqual([...ROUTER_TOOL_NAMES]);
     const workers = await harness.engine.workers();
     expect(workers).toHaveLength(1);
-    const reply = await formatUpstreamReply(harness.engine, first, 0);
+    const reply = await formatUpstreamReply(harness.engine, first, 0, {});
     expect(reply).toContain("dispatched the worker");
-    expect(reply).toContain(`${workers[0]?.id} has not finished`);
+    expect(reply).toContain(`${workers[0]?.id} is still running`);
+    expect(reply).toContain("will not reach Feishu");
     const follow = await harness.engine.ingest({
       source: "feishu",
       thread: "feishu:eng:other",
@@ -206,7 +207,8 @@ describe("DeepSeek chat-completions Router (local fake, not a live provider)", (
   });
 
   it("surfaces a provider HTTP failure and does not spawn", async () => {
-    const server = await listen(() => ({ status: 401, body: { error: "unauthorized" } }));
+    const leaked = "sk-provider-body-must-not-leak";
+    const server = await listen(() => ({ status: 401, body: { error: leaked, detail: "raw-provider-detail" } }));
     const harness = await startHarness();
     closers.push(async () => {
       await harness.engine.close();
@@ -231,8 +233,10 @@ describe("DeepSeek chat-completions Router (local fake, not a live provider)", (
     });
     await harness.engine.settle();
     expect(await harness.engine.workers()).toHaveLength(0);
-    const reply = await formatUpstreamReply(harness.engine, result, 0);
+    const reply = await formatUpstreamReply(harness.engine, result, 0, {});
     expect(reply).toMatch(/^Router failed: DeepSeek chat\/completions HTTP 401/);
+    expect(reply).not.toContain(leaked);
+    expect(reply).not.toContain("raw-provider-detail");
     const events = await harness.engine.events();
     expect(events.some((event) => event.type === "coordinator.turn_end" && event.payload.stopReason === "error")).toBe(
       true,

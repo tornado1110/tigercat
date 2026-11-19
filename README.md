@@ -76,9 +76,15 @@ model = "deepseek-flash"
 api_key_env = "DEEPSEEK_API_KEY"
 ```
 
-Claude Code does not use that Chat Completions key. Point it at DeepSeek's Anthropic endpoint with `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`, `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`), and `ANTHROPIC_MODEL=deepseek-flash`. Codex uses the Responses API (`wire_api = "responses"`, `base_url = "https://api.deepseek.com"`, model `deepseek-flash`) with `CODEX_API_KEY` or `OPENAI_API_KEY`, not Chat Completions. `spawn` launches the real adapter command. If the binary or key is missing, the Worker fails in the open and the ACP reply says so.
+These calls are documentation-backed and have not been live-tested from this repo. A provider HTTP error reports the status only. The response body is discarded.
 
-`TIGERCAT_UPSTREAM_WAIT_MS` (default `0`) is how long the open ACP prompt waits for that Worker before answering cc-connect. `0` returns the Router text plus `Worker <id> has not finished` when a Worker was started. A finished turn's text is included only after it actually finished.
+Claude Code, from [Integrate with Claude Code](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code): `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`, `ANTHROPIC_AUTH_TOKEN` set to the DeepSeek key, and `ANTHROPIC_MODEL=deepseek-flash[1m]` (plus the default opus/sonnet/haiku and subagent variables on that page). The [Messages API](https://api-docs.deepseek.com/api/create-message) accepts `x-api-key` or `Authorization: Bearer` and model `deepseek-flash`. That is not Chat Completions.
+
+Codex, from [Integrate with Codex](https://api-docs.deepseek.com/quick_start/agent_integrations/codex) and [Using the Responses API](https://api-docs.deepseek.com/guides/responses_api): Codex speaks the Responses API. The documented provider block is `base_url = "https://api.deepseek.com/"`, `wire_api = "responses"`, `model = "deepseek-flash"`, a `~/.codex/models.json` catalog, and `experimental_bearer_token` set to the DeepSeek key. This repo does not assume `CODEX_API_KEY` or `OPENAI_API_KEY` selects that provider.
+
+`deepseek-flash` is the model id on [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing). Tool calls use `POST /chat/completions` ([Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion), [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls)). Thinking defaults on; this Router sends `{"thinking": {"type": "disabled"}}` so `tool_choice` stays on the non-thinking path ([Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)).
+
+`spawn` launches the real adapter command. A missing binary or key fails in the open. The ACP prompt does not wait for the Worker: holding `session/prompt` open would leave cc-connect busy and queue the next Feishu message. When the Worker finishes later, TigerCat runs `cc-connect send --stdin` if `CC_SESSION_KEY` is set (cc-connect injects that when it starts an ACP agent). That posts to the daemon socket, which sends on the platform session. A `session/update` after the prompt returns is not that send. Without `CC_SESSION_KEY` the prompt says the result will not reach Feishu.
 
 ## cc-connect
 

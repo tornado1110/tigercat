@@ -105,17 +105,17 @@ export class ChatToolRouter implements RouterBrain {
         }),
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const name = error instanceof Error ? error.name : "Error";
       throw new TigerError(
         "router_provider",
-        `DeepSeek chat/completions request failed (${message}). No fallback was used.`,
+        `DeepSeek chat/completions request failed (${name}). No fallback was used.`,
       );
     }
     if (!response.ok) {
-      const body = await response.text();
+      await response.body?.cancel().catch(() => undefined);
       throw new TigerError(
         "router_provider",
-        `DeepSeek chat/completions HTTP ${response.status}. No fallback was used. ${body.slice(0, 240)}`,
+        `DeepSeek chat/completions HTTP ${response.status}. The provider body was discarded. No fallback was used.`,
       );
     }
     const payload = (await response.json()) as {
