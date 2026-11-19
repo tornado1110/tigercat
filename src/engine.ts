@@ -584,10 +584,15 @@ export class Engine {
 
   async settle(): Promise<void> {
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      if (this.flushing) await this.flushing;
       this.scheduleFlush();
-      if (this.flushing) await this.flushing;
+      // scheduleFlush starts flushLoop in a microtask. Yield once so that
+      // assignment is visible, then wait for that flush. Checking
+      // this.flushing before the microtask runs left the promise in place
+      // and fell through to setTimeout(0) on every attempt. Windows rounds
+      // that timer up to about 16ms, so 50 waits on each of 300 rows did
+      // not finish inside the CI test timeout.
       await Promise.resolve();
+      if (this.flushing) await this.flushing;
       const pending = await this.store.hasPendingRouterItems();
       if (!this.busy && !this.flushing && !pending && this.launchInflight === 0) return;
       await new Promise((resolve) => setTimeout(resolve, 0));
