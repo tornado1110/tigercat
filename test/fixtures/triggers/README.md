@@ -1,8 +1,8 @@
 # Trigger stream fixtures
 
 JSONL scripts for the trigger harness. One Trigger per line, UTF-8, no blank
-lines. These files are data, not test results. Nothing in this directory is
-loaded by `npm test`.
+lines. These files are data, not a test report. `npm test` replays `m0/` and
+checks the golden generator output. It does not replay `specs/`.
 
 Admission labels come from `examples/rules.default.toml` version
 `2026-11-18.1`. That file is the ignore policy. Fixture text and `expect`
@@ -19,28 +19,34 @@ are adjusted to match it. The rules file is not widened so a fixture can pass.
 
 ## M0 replay settings
 
+`npm test` (`test/integration/m0-replay.test.ts`) replays every `m0/*.jsonl`
+with:
+
 ```js
 const harness = await startHarness({ durationMs: 0 });
 const observations = await replayTriggers(harness.engine, harness.clock, triggers);
 // mismatches(observation) is empty for every row
 ```
 
-`startHarness({ durationMs: 0 })` uses the default config: filter
-`2026-11-18.1`, `maxConcurrency` 4, idle timeout 10 minutes, in-memory
-sqlite, and `FakeTimeRuntimeFactory`. The fake turn timer is already due.
-The next `replayTriggers` clock advance completes it, the Worker becomes
-`idle`, and the subscription stays. `idle` is still an active subscriber, so
-a later message on that home thread is delivered to the same Worker.
-Interrupt on an idle Worker still reports `interrupt: true` from the stop
-rule and does not drop the subscription.
+`durationMs: 0` finishes the fake Worker turn on the next clock advance. The
+Worker becomes `idle` and stays subscribed. The harness does not set
+`coordinatorRuntime`, so the Router is the scripted brain and an ignore-only
+file records 0 Router turns.
 
-Do not replay M0 with the default `durationMs` of 30 minutes. That turn
-outlives the 10-minute idle timeout, the Worker becomes `stalled`, and
-`activeSubscriptions` skips stalled sessions. Later rows that assume a live
-subscription then disagree with the engine. The 30-minute default is not the
-M0 setting.
+The same five files also have 0 `mismatches()` at the harness default,
+`durationMs` of 30 minutes. M0 labels do not depend on that choice. What does
+change is how many Router turns get recorded: a finished turn posts
+`worker.turn_end` back to the Router. On `stream-seed1.jsonl` that total is
+161 at `durationMs: 0` and 107 at 30 minutes. `chatter-only.jsonl` stays at 0
+either way.
 
-`npm test` does not run this replay.
+`specs/batching/burst-batching.jsonl` is the duration-sensitive file.
+`trg_burst_12` is a fifth spawn about 15 seconds after four other spawns.
+At 30 minutes those four Workers are still running, `maxConcurrency` is 4,
+and the row fails with two mismatches (`spawns false != true`, and an empty
+subscribe list against `feishu:eng:task-e`). At `durationMs: 0` the earlier
+turns have already finished, that spawn succeeds, and `mismatches()` is 0.
+`batch` is still not asserted. The file stays under `specs/`.
 
 ## What `mismatches()` checks
 
@@ -111,4 +117,4 @@ Replaying these with `mismatches()` fails. That failure is the current product b
 
 `specs/lifecycle/kill-worker.jsonl`. After an abnormal exit the Worker drops every subscription, and the next explicit request spawns again. The row `trg_kill_03` is `kind: worker.exited` with `unsubscribe_all`. Replay ingests that row as an ordinary trigger. It does not exit the process, and `mismatches()` does not read `unsubscribe_all`. The file keeps the unsubscribe semantics. It does not relabel the exit as `respond` just because that is what a normal ingest does today.
 
-`specs/batching/burst-batching.jsonl`. Several non-ignored triggers share a `batch` id, and a fifth spawn arrives while four Workers would still be in their turn. `mismatches()` does not read `batch`. `replayTriggers` calls `settle()` after every event, so the router is idle before the next row. Default `maxConcurrency` is 4. The fifth spawn is part of the specification, not an M0 assertion.
+`specs/batching/burst-batching.jsonl`. Several non-ignored triggers share a `batch` id. `mismatches()` does not read `batch`, and `replayTriggers` settles after every event, so this file does not show a merged Router turn. `trg_burst_12` is the duration-sensitive row described above: at the default 30-minute fake turn it does not spawn.
