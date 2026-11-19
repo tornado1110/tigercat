@@ -3,6 +3,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Engine, IngestResult } from "./engine.js";
+import {
+  CC_CONNECT_DELIVERY_GAP,
+  createWorkerResultRelay,
+  deliverViaCcConnect,
+  planCcConnectDelivery,
+} from "./upstream-delivery.js";
 import { VERSION } from "./version.js";
 
 interface UpstreamSession {
@@ -65,9 +71,16 @@ export async function serveUpstream(engine: Engine): Promise<void> {
           timestamp: startedAt,
           replyTo: null,
         });
+        const relay = createWorkerResultRelay(engine, (text) => deliverViaCcConnect(text));
         await engine.settle();
-        if (pending.signal.aborted) return { stopReason: "cancelled" as const };
+        if (pending.signal.aborted) {
+          relay.stop();
+          return { stopReason: "cancelled" as const };
+        }
         const reply = await formatUpstreamReply(engine, result, startedAt);
+        const pendingWorkers = await workersStillRunning(engine, result, startedAt);
+        if (pendingWorkers.length === 0) relay.stop();
+        else relay.watch(pendingWorkers);
         await client.notify(acp.methods.client.session.update, {
           sessionId: params.sessionId,
           update: {
@@ -75,7 +88,14 @@ export async function serveUpstream(engine: Engine): Promise<void> {
             content: { type: "text", text: reply },
           },
         });
-        if (pending.signal.aborted) return { stopReason: "cancelled" as const };
+        if (pending.signal.aborted) {
+          relay.stop();
+          return { stopReason: "cancelled" as const };
+        }
+        // Release after this handler returns so the prompt RPC can complete
+        // before cc-connect send. Holding the prompt open is not how a second
+        // thread stays responsive.
+        if (pendingWorkers.length > 0) setTimeout(() => relay.release(), 0);
         return { stopReason: "end_turn" as const };
       } finally {
         if (session.pending === pending) session.pending = null;
@@ -109,15 +129,16 @@ export async function serveUpstream(engine: Engine): Promise<void> {
 }
 
 /**
- * Text returned on the still-open ACP prompt. A Router error is the text.
- * A Worker that has not finished is named as unfinished. Nothing here
- * invents a model result. Set TIGERCAT_UPSTREAM_WAIT_MS to wait for the
- * Worker turn before the prompt returns; 0 does not wait.
+ * Text for the still-open ACP prompt. A Worker that already finished is
+ * included here, which cc-connect forwards as this turn's Feishu reply.
+ * A Worker that has not finished is not invented. Its later result is
+ * not part of this prompt.
  */
 export async function formatUpstreamReply(
   engine: Engine,
   result: IngestResult,
   startedAt: number,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   if (result.action === "ignore") return "Ignored by the admission rules.";
   const events = await engine.events();
@@ -132,22 +153,34 @@ export async function formatUpstreamReply(
   } else {
     text = `Delivered to ${result.deliveredTo.length} worker(s).`;
   }
-  const waitMs = Number(process.env.TIGERCAT_UPSTREAM_WAIT_MS ?? "0");
   const workers = (await engine.workers()).filter((worker) => worker.createdAt >= startedAt - 50);
   const ids = [...new Set([...result.deliveredTo, ...workers.map((worker) => worker.id)])];
-  if (ids.length > 0 && Number.isFinite(waitMs) && waitMs > 0) {
-    await engine.wait(ids, "all", waitMs);
-  }
   if (ids.length === 0) return text;
-  const fresh = await engine.events();
   const notes = ids.map((id) => {
-    const turn = [...fresh].reverse().find((event) => event.type === "worker.turn_end" && event.workerId === id);
-    const failure = [...fresh].reverse().find((event) => event.type === "worker.error" && event.workerId === id);
+    const turn = [...events].reverse().find((event) => event.type === "worker.turn_end" && event.workerId === id);
+    const failure = [...events].reverse().find((event) => event.type === "worker.error" && event.workerId === id);
     if (turn) return `Worker ${id} finished: ${workerNote(turn.payload)}`;
     if (failure) return `Worker ${id} failed: ${workerNote(failure.payload)}`;
-    return `Worker ${id} has not finished. No result was invented.`;
+    const plan = planCcConnectDelivery(env);
+    if (plan.ok) {
+      return `Worker ${id} is still running. This prompt is returning so another message can be accepted. The result is sent afterwards with cc-connect send.`;
+    }
+    return `Worker ${id} is still running. This prompt is returning. The result will not reach Feishu. ${CC_CONNECT_DELIVERY_GAP}`;
   });
   return [text, ...notes].join("\n");
+}
+
+async function workersStillRunning(engine: Engine, result: IngestResult, startedAt: number): Promise<string[]> {
+  const events = await engine.events();
+  const workers = (await engine.workers()).filter((worker) => worker.createdAt >= startedAt - 50);
+  const ids = [...new Set([...result.deliveredTo, ...workers.map((worker) => worker.id)])];
+  return ids.filter((id) => {
+    const done = events.some(
+      (event) =>
+        (event.type === "worker.turn_end" || event.type === "worker.error") && event.workerId === id,
+    );
+    return !done;
+  });
 }
 
 function workerNote(payload: Record<string, unknown>): string {
