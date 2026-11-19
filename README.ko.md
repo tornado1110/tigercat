@@ -1,0 +1,131 @@
+<!-- i18n-source: README.md @ b4fd4c489c29457310cd886755953b0ab1bc1242 -->
+> 간체 중국어판이 기준입니다. 이 번역은 원문보다 늦을 수 있으며, 기계 번역의 도움을 받았습니다. 수정은 환영합니다.
+
+# TigerCat
+
+[简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
+
+코딩 에이전트를 위한 Super-agent 라우터입니다. 상주하는 ACP 라우터 하나가 작업을 Claude Code, Codex, 또는 임의의 ACP agent에 넘깁니다.
+
+TigerCat은 [Agent Client Protocol](https://agentclientprotocol.com) 위에 있습니다. 업스트림에서 보면 이것**이 곧** ACP agent입니다(`tigercat acp`). 그래서 cc-connect나 Zed 같은 호스트가 이를 구동할 수 있습니다. 다운스트림에서는 ACP 클라이언트이며, 등록된 어떤 ACP runtime에서든 Worker를 띄웁니다. Feishu와 DingTalk은 그 호스트에 남고, TigerCat은 IM 채널을 구현하지 않습니다.
+
+이것은 subagent 도구가 아닙니다. 상주 Router는 라우팅하고 사람과 대화할 뿐입니다. Worker는 작업을 하나씩 맡고, Thread를 구독하고, Router에 결과를 보고합니다.
+
+이 저장소는 1주차 타당성 골격입니다. 완성된 M0이 아닙니다. 실제 Claude Code / Codex 세션, Feishu 왕복, 실제 모델을 Router로 쓰는 것, 그리고 벤더 harness에 네이티브 shell이나 편집 도구가 없다는 증명은 모두 아직 검증되지 않았습니다. CI는 stdio stub으로 `claude-code`와 `codex` 프로필을 구동합니다. 실제 바이너리용 수동 명령은 아래에 있습니다. TigerCat 자신의 MCP 카탈로그가 그 도구를 넣지 않는다고 해서, 다운스트림 agent가 스스로 가진 도구가 무엇인지를 말해 주지는 않습니다. 채널을 넘는 진입과 공유 PR 진입은 M1이며, 이 골격의 범위가 아닙니다.
+
+## 빠른 시작
+
+Node.js 22.13 이상이 필요합니다.
+
+```bash
+npm install
+npm run build
+npm link
+
+tigercat runtime list
+tigercat runtime test claude-code
+tigercat runtime test codex
+```
+
+`claude-code`와 `codex`는 내장되어 있습니다. `runtime test`는 `initialize`, `session/new`, `session/prompt`를 실행합니다.
+
+`claude`나 `codex` 바이너리가 없고 `TIGERCAT_RUNTIME_LIVE`도 설정하지 않으면, 이 테스트는 로컬 dry-run agent와 핸드셰이크합니다. 보고서에는 `mode: "dry-run"`과 `vendorExecuted: false`가 있습니다. Claude Code와 Codex는 시작되지 않으며, API 키도 읽지 않습니다.
+
+바이너리를 넣은 뒤 실제로 실행하는 명령은 다음과 같습니다.
+
+```bash
+TIGERCAT_CLAUDE_BIN="$(command -v claude)" tigercat runtime test claude-code
+TIGERCAT_CODEX_BIN="$(command -v codex)" tigercat runtime test codex
+```
+
+`TIGERCAT_CLAUDE_BIN`은 `CLAUDE_CODE_EXECUTABLE`로 전달됩니다. `TIGERCAT_CODEX_BIN`은 `CODEX_PATH`로 전달됩니다. Claude Code는 기존 `claude` 로그인 또는 `ANTHROPIC_API_KEY`를 사용합니다. Codex는 `CODEX_API_KEY` 또는 `OPENAI_API_KEY`를 사용합니다. 화면이 없는 머신에서는 `NO_BROWSER=1`을 설정해 Codex가 ChatGPT 로그인 화면을 열지 않게 합니다.
+
+이 adapter들은 CLI도 함께 포함합니다. 벤더 바이너리가 `PATH`에 없을 때 `TIGERCAT_RUNTIME_LIVE=1`은 그 adapter를 실행합니다. 패키지를 받아 벤더와 통신하므로 자격 증명이 필요합니다.
+
+```bash
+TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test claude-code
+TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test codex
+```
+
+| 런타임 | 패키지 | 버전 | 실행 파일 |
+|---|---|---|---|
+| `claude-code` | `@agentclientprotocol/claude-agent-acp` | 0.108.0 | `claude-agent-acp` |
+| `codex` | `@agentclientprotocol/codex-acp` | 2.7.0 | `codex-acp` |
+
+이 버전들은 2026-11-18에 npm registry에서 고정했습니다. `claude-code`는 `CLAUDE_AGENT_ACP_PROTOCOL=v1`을 붙여 시작하므로, 세션은 이 클라이언트가 구현한 안정적인 v1 수명 주기(`session/new`, `session/prompt`, `session/cancel`)에 머뭅니다. adapter를 이미 설치했다면 그것이 `npx`를 대신합니다.
+
+```bash
+TIGERCAT_CLAUDE_CODE_ACP=/usr/local/bin/claude-agent-acp tigercat runtime test claude-code
+TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
+```
+
+같은 이름의 `runtime add`는 내장 항목을 덮어씁니다. 두 이름 모두 `coordinator_runtime`이 될 수 있습니다. Router 도구 목록은 여전히 spawn, list, send, read, interrupt, wait, kill, subscribe, unsubscribe뿐입니다.
+
+`coordinator_runtime`은 직접 설치한 ACP agent의 이름입니다. 이 저장소는 그 프로그램을 넣지 않습니다. 필드를 비워 두면 스크립트 brain이 유지됩니다. [docs/operations.md](docs/i18n/ko/operations.md)를 보세요. 입장 정책 파일은 `examples/rules.default.toml`이며, 현재 버전은 `2026-11-18.1`입니다. 메시지 전체가 명시적인 잡담(`thanks`, `lol`, `morning`)이면 결과는 `ignore`이고 Router 호출은 없습니다. 구독자가 없을 때 `Morning all`이나 `coffee break` 같은 알 수 없는 자연어는 `candidate`입니다. 이미 구독된 Thread에서 확인을 하면 그 Worker에 대한 `respond`입니다. `candidate`는 `ignore`로 다시 쓰이지 않습니다.
+
+```bash
+tigercat acp
+```
+
+## Router로서의 DeepSeek
+
+`router.provider = "deepseek"`는 스크립트 brain을 DeepSeek Chat Completions로 바꿉니다(`POST {base_url}/chat/completions`, `Authorization: Bearer $DEEPSEEK_API_KEY`, 모델 `deepseek-flash`, thinking은 끔). Router가 호출할 수 있는 것은 `spawn`, `list`, `send`, `read`, `interrupt`, `wait`, `kill`, `subscribe`, `unsubscribe`뿐입니다. 키가 없으면 `tigercat acp`는 어떤 요청보다 먼저 멈춥니다. 제공자 오류는 ACP prompt에 `Router failed: ...`로 돌아옵니다. dry-run도 없고, 스크립트로 되돌리는 길도 없습니다.
+
+```toml
+default_worker_runtime = "claude-code"
+
+[router]
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+```
+
+이 호출은 문서에 근거하며, 이 저장소에서 실기 테스트는 하지 않았습니다. 제공자 HTTP 오류는 상태만 보고합니다. 응답 본문은 버립니다.
+
+Claude Code는 [Integrate with Claude Code](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code)의 절차입니다. `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`, `ANTHROPIC_AUTH_TOKEN`에 DeepSeek 키, `ANTHROPIC_MODEL=deepseek-flash[1m]`(그 페이지의 기본 opus/sonnet/haiku와 subagent 변수도 포함). [Messages API](https://api-docs.deepseek.com/api/create-message)는 `x-api-key` 또는 `Authorization: Bearer`와 모델 `deepseek-flash`를 받습니다. 그것은 Chat Completions가 아닙니다.
+
+Codex는 [Integrate with Codex](https://api-docs.deepseek.com/quick_start/agent_integrations/codex)와 [Using the Responses API](https://api-docs.deepseek.com/guides/responses_api)의 절차입니다. Codex는 Responses API를 말합니다. 문서의 제공자 설정은 `base_url = "https://api.deepseek.com/"`, `wire_api = "responses"`, `model = "deepseek-flash"`, `~/.codex/models.json` 목록, 그리고 DeepSeek 키로 둔 `experimental_bearer_token`입니다. 이 저장소는 `CODEX_API_KEY`나 `OPENAI_API_KEY`가 그 제공자를 고른다고 보지 않습니다.
+
+`deepseek-flash`는 [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing)의 모델 id입니다. 도구 호출은 `POST /chat/completions`입니다([Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion), [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls)). Thinking은 기본적으로 켜져 있습니다. 이 Router는 `{"thinking": {"type": "disabled"}}`를 보내 `tool_choice`가 thinking이 아닌 경로에 머물게 합니다([Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)).
+
+`spawn`은 실제 adapter 명령을 실행합니다. 바이너리나 키가 없을 때의 실패는 숨기지 않습니다. ACP prompt는 Worker를 기다리지 않습니다. `session/prompt`를 열어 두면 cc-connect가 바쁘고 다음 Feishu 메시지가 큐에 들어갑니다. Worker가 나중에 끝나면, `CC_SESSION_KEY`가 설정되어 있을 때 TigerCat은 `cc-connect send --stdin`을 실행합니다(cc-connect가 ACP agent를 시작할 때 그 값을 넣습니다). 그것은 데몬 소켓으로 보내고, 데몬이 플랫폼 세션에서 전송합니다. prompt가 반환된 뒤의 `session/update`는 그 전송이 아닙니다. `CC_SESSION_KEY`가 없으면 prompt는 결과가 Feishu에 닿지 않는다고 말합니다.
+
+## cc-connect
+
+TigerCat을 범용 ACP agent로 등록합니다. Feishu 또는 DingTalk 채널은 호스트가 가집니다.
+
+```toml
+type = "acp"
+cmd = "tigercat"
+args = ["acp"]
+```
+
+호스트가 주제나 pull request를 알고 있으면 prompt의 `_meta.thread_id`에 Thread id를 넘깁니다. 없으면 업스트림 세션 자체가 하나의 Thread가 됩니다(`acp:<sessionId>`).
+
+## 운영
+
+포그라운드에서의 시작, 중지, 재시작, 자격 증명을 나누는 방법, 스크립트 데모 설정은 [docs/operations.md](docs/i18n/ko/operations.md)에 있습니다. [examples/config.example.toml](examples/config.example.toml)은 `coordinator_runtime`을 설정하지 않습니다. 그것은 모델 Router가 아니며, 이 저장소는 그것을 넣지 않습니다. `start`도 `stop`도 하위 명령이 없습니다. `runtime add --env`는 평문을 `config.toml`에 씁니다. API 키를 거기에 넣지 마세요.
+
+## 1주차에 하는 일
+
+Trigger는 순서가 있는 규칙 엔진에 입장한 뒤 다음과 같이 라우팅됩니다.
+
+- `ignore`는 버려집니다. Router 호출은 없습니다.
+- 이미 Worker가 구독한 Thread에는 이후 Trigger가 직접 갑니다. Router 턴은 생기지 않습니다.
+- 그 밖의 것은 Router의 다음 턴으로 묶입니다. `candidate` 판단은 거기서만 합니다. 구독자가 없는 `respond`는 spawn됩니다.
+- `spawn`은 즉시 `{ "status": "started" }`를 반환합니다. 결과는 Router가 한가할 때 밀어 넣고, 바쁠 때는 하나의 배치로 대기합니다. `wait`는 선택입니다.
+- 규칙에 있는 정지 구문은 현재 턴을 취소하고(`session/cancel`) 구독은 **유지합니다**. 그래서 「멈추고, 대신 X를 하라」는 그 Worker에게 그대로 도달합니다.
+- `interrupt`는 현재 턴을 취소하고 구독은 유지합니다. `kill`, 비정상 종료, 또는 재시작 때 살아 있는 Worker 프로세스가 없으면 구독을 모두 놓고 worktree는 남깁니다. 그 Thread는 다시 Router를 거칩니다.
+
+`worker.turn_end.awaitingInput`은 TigerCat이 붙이는 주석이며 ACP 필드가 아닙니다. agent의 `stopReason`은 ACP가 보낸 그대로 저장됩니다(보통 `end_turn`). 그 이유가 `end_turn`이고 Worker 텍스트가 질문이나 확인 요청처럼 보일 때에만 TigerCat은 `awaitingInput`을 세웁니다.
+
+상태는 `Store` 인터페이스 뒤의 `node:sqlite`에 있습니다. 프로세스가 유지하는 것은 socket과 timer뿐입니다. 재시작은 Thread와 아직 전달되지 않은 Router 큐를 다시 읽습니다. Worker 프로세스는 재시작 뒤에 남지 않으므로 그 구독은 해제됩니다.
+
+## 테스트
+
+```bash
+npm test
+```
+
+`npm run test:tck`는 [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0`을 `tigercat acp`에 대해 실행합니다([uv](https://docs.astral.sh/uv/)가 필요합니다). Windows에서 이 고정된 버전은 자신의 teardown에서 `os.killpg`를 호출합니다. 스크립트는 해당 requirement id를 **UNVERIFIED**로 출력하고 0이 아닌 상태로 종료합니다. killpg teardown이 실패하면 이 게이트는 실패합니다. 재생 fixture는 테스트 엔지니어의 JSONL schema를 씁니다. harness는 `test/harness/`에 있습니다. Fixture 파일은 QA 소유이며, 라벨 차이를 지우려고 여기서 수정하지 않습니다.
