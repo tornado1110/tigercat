@@ -62,6 +62,24 @@ TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
 tigercat acp
 ```
 
+## DeepSeek as the Router
+
+`router.provider = "deepseek"` replaces the scripted brain with DeepSeek Chat Completions (`POST {base_url}/chat/completions`, `Authorization: Bearer $DEEPSEEK_API_KEY`, model `deepseek-flash`, thinking disabled). The Router may call only `spawn`, `list`, `send`, `read`, `interrupt`, `wait`, `kill`, `subscribe`, and `unsubscribe`. A missing key stops `tigercat acp` before any request. A provider error is returned on the ACP prompt as `Router failed: ...`. There is no dry-run and no scripted fallback.
+
+```toml
+default_worker_runtime = "claude-code"
+
+[router]
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+```
+
+Claude Code does not use that Chat Completions key. Point it at DeepSeek's Anthropic endpoint with `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`, `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`), and `ANTHROPIC_MODEL=deepseek-flash`. Codex uses the Responses API (`wire_api = "responses"`, `base_url = "https://api.deepseek.com"`, model `deepseek-flash`) with `CODEX_API_KEY` or `OPENAI_API_KEY`, not Chat Completions. `spawn` launches the real adapter command. If the binary or key is missing, the Worker fails in the open and the ACP reply says so.
+
+`TIGERCAT_UPSTREAM_WAIT_MS` (default `0`) is how long the open ACP prompt waits for that Worker before answering cc-connect. `0` returns the Router text plus `Worker <id> has not finished` when a Worker was started. A finished turn's text is included only after it actually finished.
+
 ## cc-connect
 
 Register TigerCat as a generic ACP agent. The host owns the Feishu or DingTalk channel.

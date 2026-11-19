@@ -558,6 +558,10 @@ export class Engine {
     waiter({ outcome: { outcome: "selected", optionId } });
   }
 
+  noteSecret(name: string, value: string): void {
+    this.secrets.noteEnv({ [name]: value });
+  }
+
   async routerDecisionCount(): Promise<number> {
     return (await this.store.listRouterTurns()).length;
   }
