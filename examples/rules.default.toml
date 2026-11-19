@@ -1,0 +1,107 @@
+# Default admission policy. Version this string when behavior changes.
+# QA fixtures are calibrated against this version; they are not the source
+# of the behavior, and this file is not rewritten to erase fixture diffs.
+version = "2026-11-18.1"
+
+# Ordered rules, first match wins. The engine does not special-case these
+# names. Match keys: source, thread_id_prefix, kind, is_bot, text (regex),
+# has_subscriber. A `not` table inverts its inner predicate.
+# Text regexes are case-insensitive only when the pattern starts with `(?i)`.
+# They are matched with JavaScript RegExp against the whole text only when
+# the pattern itself is anchored. `interrupt = true` cancels the current
+# turn and keeps subscriptions.
+#
+# Match keys: source, thread_id_prefix, kind, is_bot, text (regex),
+# has_subscriber. A `not` table inverts its inner predicate.
+# `interrupt = true` cancels the subscribed Worker's current turn and
+# keeps every Thread subscription.
+
+[[rules]]
+name = "upstream-acp"
+outcome = "respond"
+
+  [rules.match]
+  # cc-connect / Zed prompts are not in the fixture allowlist. They are
+  # explicit turns from the upstream ACP client.
+  source = "acp"
+
+[[rules]]
+name = "allowlist"
+outcome = "ignore"
+
+  [rules.match.not]
+  thread_id_prefix = ["feishu:eng:", "github:tornado1110/tigercat#"]
+
+[[rules]]
+name = "bot-chat"
+outcome = "ignore"
+
+  [rules.match]
+  is_bot = true
+  kind = ["im.message", "pr.comment"]
+
+[[rules]]
+name = "ci-failure-subscribed"
+outcome = "respond"
+
+  [rules.match]
+  kind = "ci.result"
+  text = "(?i)fail|failed|failure"
+  has_subscriber = true
+
+[[rules]]
+name = "ci-failure-open"
+outcome = "candidate"
+
+  [rules.match]
+  kind = "ci.result"
+  text = "(?i)fail|failed|failure"
+  has_subscriber = false
+
+[[rules]]
+name = "ci-other"
+outcome = "ignore"
+
+  [rules.match]
+  kind = "ci.result"
+
+[[rules]]
+name = "stop"
+outcome = "respond"
+interrupt = true
+
+  [rules.match]
+  # Product stop: cancel the turn, keep subscriptions, so a follow-up
+  # on the same Thread still reaches this Worker.
+  text = "(?i)please stop this task|cancel this worker|interrupt this, I will finish it myself|stop, do not continue|stop, do .+ instead"
+  has_subscriber = true
+
+[[rules]]
+name = "explicit-work"
+outcome = "respond"
+
+  [rules.match]
+  text = "(?i)@tigercat|\\bplease\\s+(add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep)\\b|^(?:please\\s+)?(add|fix|implement|refactor|write|change|update|remove|delete|investigate|document|run|create|replace|move|rename|set|keep)\\b"
+
+# Explicit whole-message chatter only. "Morning all" and "coffee break"
+# do not match: the extra words miss the `$` anchor, so they stay
+# `candidate` (no subscriber) or `subscribed-clarification` (subscriber).
+# A follow-up such as "lol thanks for the fix, but the empty list still
+# prints null" is not discarded.
+[[rules]]
+name = "chatter"
+outcome = "ignore"
+
+  [rules.match]
+  text = "(?i)^(?:morning|good morning|good night|hello|hi|hey|thanks|thank you|thx|ty|ok|okay|\\+1|lol|lgtm|nice|cool|haha|wow|lunch|brb|gtg)[.!\\s]*$|^(?:👍|🎉|👋|😂|🙏|✅|❤️)+$"
+
+[[rules]]
+name = "subscribed-clarification"
+outcome = "respond"
+
+  [rules.match]
+  has_subscriber = true
+
+[[rules]]
+name = "otherwise"
+outcome = "candidate"
