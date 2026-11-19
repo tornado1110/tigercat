@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ b4fd4c489c29457310cd886755953b0ab1bc1242 -->
+<!-- i18n-source: README.md @ 50d58949fab671c9f4514d69e19299955cdf8837 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it.
 
 # TigerCat
@@ -61,7 +61,7 @@ TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
 
 `runtime add` with the same name overrides a built-in. Either name can be `coordinator_runtime`. The Router tool list is still only spawn, list, send, read, interrupt, wait, kill, subscribe, and unsubscribe.
 
-`coordinator_runtime` names an ACP agent you installed yourself. This repository does not ship that program. Leave the field unset to keep the scripted brain; see [docs/operations.md](docs/i18n/en/operations.md). The admission policy is `examples/rules.default.toml`, currently version `2026-11-18.1`. Explicit whole-message chatter (`thanks`, `lol`, `morning`) is `ignore` and makes zero Router calls. Unknown natural language such as `Morning all` or `coffee break` is `candidate` when nobody is subscribed, and a clarification on an already subscribed Thread is `respond` to that Worker. Candidates are not rewritten to `ignore`.
+`coordinator_runtime` names an ACP agent you installed yourself. This repository does not ship that program. Leave the field unset to keep the scripted brain; see [docs/operations.md](docs/i18n/en/operations.md). The admission policy is `examples/rules.default.toml`, currently version `2026-11-19.1`. Explicit whole-message chatter (`thanks`, `lol`, `morning`, and the Japanese, Korean, and Spanish acknowledgements in that file) is `ignore` and makes zero Router calls. Unknown natural language such as `Morning all` or `coffee break` is `candidate` when nobody is subscribed, and a clarification on an already subscribed Thread is `respond` to that Worker. Candidates are not rewritten to `ignore`. Trigger text is NFKC-normalized. Pattern literals are folded the same way, and regex syntax produced by that fold is escaped, so fullwidth punctuation stays a literal. A backslash before a non-ASCII character joins that literal run, so `\＊` matches `*`. Matching is always case-insensitive, and accents are kept: an unlisted `adios` does not match `adiós`. A code point inside a character class must not fold to more than one code point; otherwise `loadConfig` fails with the rule name and the service does not start until the rule is fixed. Japanese and Korean match as substrings. Latin uses a Unicode letter boundary `(?<![\p{L}\p{N}])…(?![\p{L}\p{N}])` (the rule carries the `u` flag; not `\b`). A sentence that also contains a task is not ignored.
 
 ```bash
 tigercat acp

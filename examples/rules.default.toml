@@ -1,15 +1,22 @@
 # Default admission policy. Version this string when behavior changes.
 # QA fixtures are calibrated against this version; they are not the source
 # of the behavior, and this file is not rewritten to erase fixture diffs.
-version = "2026-11-18.1"
+version = "2026-11-19.1"
 
 # Ordered rules, first match wins. The engine does not special-case these
 # names. Match keys: source, thread_id_prefix, kind, is_bot, text (regex),
 # has_subscriber. A `not` table inverts its inner predicate.
-# Text regexes are case-insensitive only when the pattern starts with `(?i)`.
-# They are matched with JavaScript RegExp against the whole text only when
-# the pattern itself is anchored. `interrupt = true` cancels the current
-# turn and keeps subscriptions.
+# Trigger text is NFKC-normalized before JavaScript RegExp runs. Pattern
+# literals are NFKC-folded too, and fullwidth punctuation stays a literal
+# (it is not turned into regex syntax). A backslash before a non-ASCII
+# character is part of that literal, so `\＊` matches `*`. A character class
+# cannot hold a compatibility form that folds to more than one code point.
+# Matching is
+# always case-insensitive; a leading `(?i)` is accepted and is not required.
+# Accents are not removed (`sí` is not `si`). Patterns that use `\p{...}`
+# need the `u` flag (`(?u)` or `(?iu)`). The engine does not add `u` on its
+# own. A pattern is anchored only when it anchors itself.
+# `interrupt = true` cancels the current turn and keeps subscriptions.
 #
 # Match keys: source, thread_id_prefix, kind, is_bot, text (regex),
 # has_subscriber. A `not` table inverts its inner predicate.
@@ -88,12 +95,18 @@ outcome = "respond"
 # `candidate` (no subscriber) or `subscribed-clarification` (subscriber).
 # A follow-up such as "lol thanks for the fix, but the empty list still
 # prints null" is not discarded.
+#
+# Japanese, Korean, and Spanish acknowledgements use the same whole-message
+# shape. CJK phrases are literal substrings (`\b` does not treat kana, kanji,
+# or hangul as word characters). Latin phrases use a Unicode letter/number
+# boundary, never `\b`. List accent variants explicitly: `sí` and `si` both
+# match; `adiós` does not match `adios`.
 [[rules]]
 name = "chatter"
 outcome = "ignore"
 
   [rules.match]
-  text = "(?i)^(?:morning|good morning|good night|hello|hi|hey|thanks|thank you|thx|ty|ok|okay|\\+1|lol|lgtm|nice|cool|haha|wow|lunch|brb|gtg)[.!\\s]*$|^(?:👍|🎉|👋|😂|🙏|✅|❤️)+$"
+  text = "(?iu)^[¡¿]*(?:(?<![\\p{L}\\p{N}])(?:morning|good morning|good night|hello|hi|hey|thanks|thank you|thx|ty|ok|okay|\\+1|lol|lgtm|nice|cool|haha|wow|lunch|brb|gtg|muchas gracias|de acuerdo|gracias|vale|sí|si|adiós)(?![\\p{L}\\p{N}])|ありがとうございます|ありがとう|お疲れ様です|お疲れさまです|お疲れ様|お疲れさま|おつかれさまです|おつかれさま|おつかれ|了解です|了解|감사합니다|고마워요|알겠습니다)[.!\\s。、]*$|^(?:👍|🎉|👋|😂|🙏|✅|❤️)+$"
 
 [[rules]]
 name = "subscribed-clarification"

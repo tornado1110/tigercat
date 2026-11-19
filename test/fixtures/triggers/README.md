@@ -5,7 +5,7 @@ lines. These files are data, not a test report. `npm test` replays `m0/` and
 checks the golden generator output. It does not replay `specs/`.
 
 Admission labels come from `examples/rules.default.toml` version
-`2026-11-18.1`. That file is the ignore policy. Fixture text and `expect`
+`2026-11-19.1`. That file is the ignore policy. Fixture text and `expect`
 are adjusted to match it. The rules file is not widened so a fixture can pass.
 
 ## Layout
@@ -86,7 +86,7 @@ Same order as the versioned rules. First match wins.
 
 | File | What zero `mismatches()` means |
 |------|--------------------------------|
-| `chatter-only.jsonl` | Every row is `ignore` under `2026-11-18.1` (allowlist, bot chat, non-failure CI, or whole-message chatter). Zero spawns. |
+| `chatter-only.jsonl` | Every row is `ignore` under `2026-11-19.1` (allowlist, bot chat, non-failure CI, or whole-message chatter). Zero spawns. |
 | `single-task.jsonl` | One home-thread spawn. Later messages on that thread reach the Worker. |
 | `stop-request.jsonl` | Both stop lines set `interrupt: true` and keep the subscription. `trg_stop_05` matches `stop, do .+ instead`. |
 | `four-tasks.jsonl` | Four home-thread spawns, plus ignore and candidate rows. No `batch` key. This does not claim the router merged a turn. |
@@ -105,7 +105,7 @@ Counts for `--count 300 --work 20` are exact roles, not filter outcomes:
 - CI rows = round(count * 0.12) = 36
 - social-noise rows = the remaining 199
 
-The social-noise role is not the ignore outcome. A line is `ignore` only when `2026-11-18.1` says so. `Morning all` and `coffee break` on an allowlisted thread are `candidate`.
+The social-noise role is not the ignore outcome. A line is `ignore` only when `2026-11-19.1` says so. `Morning all` and `coffee break` on an allowlisted thread are `candidate`.
 
 ## Specs that are not M0
 

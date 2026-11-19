@@ -4,7 +4,7 @@ import path from "node:path";
 import { parse, stringify } from "smol-toml";
 import { fileURLToPath } from "node:url";
 import { TigerError } from "./errors.js";
-import type { FilterRule, RuleMatch } from "./filter.js";
+import { compileFilterRules, type FilterRule, type RuleMatch } from "./filter.js";
 import type { AppConfig, FilterAction, PermissionPolicy, RouterProviderConfig, RuntimeConfig } from "./types.js";
 import { DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_SUMMARY_MAX_CHARS } from "./types.js";
 
@@ -12,7 +12,7 @@ export function defaultRulesPath(): string {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "examples", "rules.default.toml");
 }
 
-export const DEFAULT_FILTER_VERSION = "2026-11-18.1";
+export const DEFAULT_FILTER_VERSION = "2026-11-19.1";
 
 export function loadDefaultPolicy(): { version: string; rules: FilterRule[] } {
   const raw = parse(readFileSync(defaultRulesPath(), "utf8")) as Record<string, unknown>;
@@ -89,9 +89,11 @@ function normalizeConfig(raw: Record<string, unknown>): AppConfig {
     filter: {
       version: stringOr(filterRaw.version, base.filter.version),
       defaultAction: actionOr(filterRaw.default, "candidate"),
-      rules: raw.filter === undefined || filterRaw.rules === undefined
-        ? loadDefaultRules()
-        : rulesRaw.map((rule) => normalizeRule(asRecord(rule))),
+      rules: compileLoaded(
+        raw.filter === undefined || filterRaw.rules === undefined
+          ? loadDefaultRules()
+          : rulesRaw.map((rule) => normalizeRule(asRecord(rule))),
+      ),
     },
     runtimes: (Array.isArray(raw.runtimes) ? raw.runtimes : []).map((entry) =>
       normalizeRuntime(asRecord(entry)),
@@ -159,7 +161,12 @@ function normalizeRouter(value: unknown): RouterProviderConfig | undefined {
 
 function parseRules(value: unknown): FilterRule[] {
   if (!Array.isArray(value)) return [];
-  return value.map((entry) => normalizeRule(asRecord(entry)));
+  return compileLoaded(value.map((entry) => normalizeRule(asRecord(entry))));
+}
+
+function compileLoaded(rules: FilterRule[]): FilterRule[] {
+  compileFilterRules(rules);
+  return rules;
 }
 
 function normalizeRule(raw: Record<string, unknown>): FilterRule {

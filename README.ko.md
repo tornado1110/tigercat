@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ b4fd4c489c29457310cd886755953b0ab1bc1242 -->
+<!-- i18n-source: README.md @ 50d58949fab671c9f4514d69e19299955cdf8837 -->
 > 간체 중국어판이 기준입니다. 이 번역은 원문보다 늦을 수 있으며, 기계 번역의 도움을 받았습니다. 수정은 환영합니다.
 
 # TigerCat
@@ -61,7 +61,7 @@ TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
 
 같은 이름의 `runtime add`는 내장 항목을 덮어씁니다. 두 이름 모두 `coordinator_runtime`이 될 수 있습니다. Router 도구 목록은 여전히 spawn, list, send, read, interrupt, wait, kill, subscribe, unsubscribe뿐입니다.
 
-`coordinator_runtime`은 직접 설치한 ACP agent의 이름입니다. 이 저장소는 그 프로그램을 넣지 않습니다. 필드를 비워 두면 스크립트 brain이 유지됩니다. [docs/operations.md](docs/i18n/ko/operations.md)를 보세요. 입장 정책 파일은 `examples/rules.default.toml`이며, 현재 버전은 `2026-11-18.1`입니다. 메시지 전체가 명시적인 잡담(`thanks`, `lol`, `morning`)이면 결과는 `ignore`이고 Router 호출은 없습니다. 구독자가 없을 때 `Morning all`이나 `coffee break` 같은 알 수 없는 자연어는 `candidate`입니다. 이미 구독된 Thread에서 확인을 하면 그 Worker에 대한 `respond`입니다. `candidate`는 `ignore`로 다시 쓰이지 않습니다.
+`coordinator_runtime`은 직접 설치한 ACP agent의 이름입니다. 이 저장소는 그 프로그램을 넣지 않습니다. 필드를 비워 두면 스크립트 brain이 유지됩니다. [docs/operations.md](docs/i18n/ko/operations.md)를 보세요. 입장 정책 파일은 `examples/rules.default.toml`이며, 현재 버전은 `2026-11-19.1`입니다. 메시지 전체가 명시적인 잡담(`thanks`, `lol`, `morning`, 그리고 그 파일의 일본어·한국어·스페인어 확인)이면 결과는 `ignore`이고 Router 호출은 없습니다. 구독자가 없을 때 `Morning all`이나 `coffee break` 같은 알 수 없는 자연어는 `candidate`입니다. 이미 구독된 Thread에서 확인을 하면 그 Worker에 대한 `respond`입니다. `candidate`는 `ignore`로 다시 쓰이지 않습니다. 트리거 본문은 NFKC입니다. 규칙의 리터럴도 같이 접히고, 접히며 생긴 정규식 메타문자는 이스케이프되므로 전각 문장부호는 리터럴로 남습니다. 백슬래시 뒤의 비 ASCII 문자도 그 리터럴에 들어가므로 `\＊`는 `*`와 맞습니다. 일치는 항상 대소문자를 가리지 않고, 악센트는 유지됩니다. 목록에 없는 `adios`는 `adiós`와 맞지 않습니다. 문자 클래스 안의 코드 포인트 하나가 여러 코드 포인트로 접히면 `loadConfig`가 규칙 이름을 담아 실패하고, 규칙을 고치기 전에는 서비스가 시작되지 않습니다. 일본어와 한국어는 부분 문자열, 라틴 문자는 유니코드 글자 경계 `(?<![\p{L}\p{N}])…(?![\p{L}\p{N}])`입니다(규칙이 `u` 플래그를 가지며 `\b`는 쓰지 않습니다). 문장에 작업이 함께 있으면 이 규칙은 무시하지 않습니다.
 
 ```bash
 tigercat acp
