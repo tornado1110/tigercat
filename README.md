@@ -1,16 +1,18 @@
 # TigerCat
 
-A Super-agent router for coding agents: one resident ACP router that dispatches work to Claude Code, Codex, or any ACP agent.
+[简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
 
-TigerCat sits on the [Agent Client Protocol](https://agentclientprotocol.com). Upstream it **is** an ACP agent (`tigercat acp`), so hosts such as cc-connect or Zed can drive it. Downstream it is an ACP client that launches Workers on any registered ACP runtime. Feishu and DingTalk stay in those hosts; TigerCat does not implement IM channels.
+面向编程代理的 Super-agent 路由器：一个常驻的 ACP 路由器，把工作分发给 Claude Code、Codex，或任何 ACP agent。
 
-It is not a subagent tool. A resident Router only routes and talks to the human. Workers own one task each, subscribe to Threads, and report back to the Router.
+TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。对上游而言，它**就是**一个 ACP agent（`tigercat acp`），因此 cc-connect 或 Zed 这样的宿主可以驱动它。对下游而言，它是 ACP 客户端，会在任一已注册的 ACP runtime 上启动 Worker。飞书和钉钉留在那些宿主里；TigerCat 不实现 IM 频道。
 
-This repository is a week-1 feasibility skeleton. It is not a completed M0. Real Claude Code / Codex sessions, a Feishu round-trip, a real model as the Router, and proof that a vendor harness has no native shell or edit tools are all still unverified. CI drives the `claude-code` and `codex` profiles through the stdio stub. The manual commands for a real binary are below. TigerCat's own MCP catalog omitting those tools does not say anything about the tools a downstream agent ships itself. Cross-channel and shared-PR ingress are M1, not this skeleton.
+它不是 subagent 工具。常驻的 Router 只做路由，并与人对话。每个 Worker 负责一个任务，订阅 Thread，再向 Router 回报。
 
-## Quickstart
+本仓库是第 1 周的可行性骨架，还不是完成的 M0。真实的 Claude Code / Codex 会话、一次飞书往返、用真实模型担任 Router，以及「某个厂商的 harness 没有原生 shell 或编辑工具」这一证明，都尚未验证。CI 通过 stdio stub 驱动 `claude-code` 和 `codex` 这两个 profile。真实二进制的手动命令见下文。TigerCat 自己的 MCP 目录不收录那些工具，这并不能说明下游 agent 自己带了哪些工具。跨频道进入和共享 PR 进入属于 M1，不是这个骨架的范围。
 
-Requires Node.js 22.13 or newer.
+## 快速开始
+
+需要 Node.js 22.13 或更高版本。
 
 ```bash
 npm install
@@ -22,49 +24,49 @@ tigercat runtime test claude-code
 tigercat runtime test codex
 ```
 
-`claude-code` and `codex` are built in. `runtime test` runs `initialize`, `session/new`, and `session/prompt`.
+`claude-code` 和 `codex` 是内置的。`runtime test` 会执行 `initialize`、`session/new` 和 `session/prompt`。
 
-With no `claude` or `codex` binary, and with `TIGERCAT_RUNTIME_LIVE` unset, that test handshakes a local dry-run agent. The report has `mode: "dry-run"` and `vendorExecuted: false`. Claude Code and Codex are not started, and no API key is read.
+如果没有 `claude` 或 `codex` 二进制，并且没有设置 `TIGERCAT_RUNTIME_LIVE`，这次测试会与本地的 dry-run agent 完成握手。报告中为 `mode: "dry-run"` 和 `vendorExecuted: false`。Claude Code 和 Codex 不会启动，也不会读取 API key。
 
-A real run, once the binary is installed:
+二进制装好之后，真实跑法如下：
 
 ```bash
 TIGERCAT_CLAUDE_BIN="$(command -v claude)" tigercat runtime test claude-code
 TIGERCAT_CODEX_BIN="$(command -v codex)" tigercat runtime test codex
 ```
 
-`TIGERCAT_CLAUDE_BIN` is forwarded as `CLAUDE_CODE_EXECUTABLE`. `TIGERCAT_CODEX_BIN` is forwarded as `CODEX_PATH`. Claude Code uses an existing `claude` login or `ANTHROPIC_API_KEY`. Codex uses `CODEX_API_KEY` or `OPENAI_API_KEY`. On a headless machine set `NO_BROWSER=1` so Codex does not open a ChatGPT login.
+`TIGERCAT_CLAUDE_BIN` 会作为 `CLAUDE_CODE_EXECUTABLE` 往下传。`TIGERCAT_CODEX_BIN` 会作为 `CODEX_PATH` 往下传。Claude Code 使用已有的 `claude` 登录，或 `ANTHROPIC_API_KEY`。Codex 使用 `CODEX_API_KEY` 或 `OPENAI_API_KEY`。在没有图形界面的机器上设置 `NO_BROWSER=1`，避免 Codex 打开 ChatGPT 登录页。
 
-The adapters also bundle a CLI. `TIGERCAT_RUNTIME_LIVE=1` launches that adapter when the vendor binary is not on `PATH`. That downloads the package and talks to the vendor, so it needs credentials:
+这些 adapter 也自带一个 CLI。当厂商二进制不在 `PATH` 上时，`TIGERCAT_RUNTIME_LIVE=1` 会启动这个 adapter。这会下载软件包并与厂商通信，因此需要凭据：
 
 ```bash
 TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test claude-code
 TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test codex
 ```
 
-| Runtime | Package | Version | Bin |
+| 运行时 | 包 | 版本 | 可执行文件 |
 |---|---|---|---|
 | `claude-code` | `@agentclientprotocol/claude-agent-acp` | 0.108.0 | `claude-agent-acp` |
 | `codex` | `@agentclientprotocol/codex-acp` | 2.7.0 | `codex-acp` |
 
-Versions were pinned from the npm registry on 2026-11-18. `claude-code` is started with `CLAUDE_AGENT_ACP_PROTOCOL=v1` so the session stays on the stable v1 lifecycle this client implements (`session/new`, `session/prompt`, `session/cancel`). An adapter you already installed replaces `npx`:
+这些版本号是 2026-11-18 从 npm registry 钉住的。`claude-code` 启动时带上 `CLAUDE_AGENT_ACP_PROTOCOL=v1`，让会话留在本客户端所实现的稳定 v1 生命周期上（`session/new`、`session/prompt`、`session/cancel`）。如果你已经装好 adapter，它会代替 `npx`：
 
 ```bash
 TIGERCAT_CLAUDE_CODE_ACP=/usr/local/bin/claude-agent-acp tigercat runtime test claude-code
 TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
 ```
 
-`runtime add` with the same name overrides a built-in. Either name can be `coordinator_runtime`. The Router tool list is still only spawn, list, send, read, interrupt, wait, kill, subscribe, and unsubscribe.
+同名的 `runtime add` 会覆盖内置项。这两个名字都可以当作 `coordinator_runtime`。Router 的工具列表仍然只有 spawn、list、send、read、interrupt、wait、kill、subscribe 和 unsubscribe。
 
-`coordinator_runtime` names an ACP agent you installed yourself. This repository does not ship that program. Leave the field unset to keep the scripted brain; see [docs/operations.md](docs/operations.md). The admission policy is `examples/rules.default.toml`, currently version `2026-11-18.1`. Explicit whole-message chatter (`thanks`, `lol`, `morning`) is `ignore` and makes zero Router calls. Unknown natural language such as `Morning all` or `coffee break` is `candidate` when nobody is subscribed, and a clarification on an already subscribed Thread is `respond` to that Worker. Candidates are not rewritten to `ignore`.
+`coordinator_runtime` 指的是你自己安装的 ACP agent。本仓库不附带那个程序。这个字段留空，才会继续用脚本化 brain；见 [docs/operations.md](docs/operations.md)。准入策略文件是 `examples/rules.default.toml`，当前版本为 `2026-11-18.1`。整句都是明确的闲聊（`thanks`、`lol`、`morning`）时，结果为 `ignore`，Router 调用次数为零。当没有人订阅时，`Morning all` 或 `coffee break` 这类未知自然语言是 `candidate`；在已经订阅的 Thread 上做澄清，则是对该 Worker 的 `respond`。`candidate` 不会被改写成 `ignore`。
 
 ```bash
 tigercat acp
 ```
 
-## DeepSeek as the Router
+## 把 DeepSeek 用作 Router
 
-`router.provider = "deepseek"` replaces the scripted brain with DeepSeek Chat Completions (`POST {base_url}/chat/completions`, `Authorization: Bearer $DEEPSEEK_API_KEY`, model `deepseek-flash`, thinking disabled). The Router may call only `spawn`, `list`, `send`, `read`, `interrupt`, `wait`, `kill`, `subscribe`, and `unsubscribe`. A missing key stops `tigercat acp` before any request. A provider error is returned on the ACP prompt as `Router failed: ...`. There is no dry-run and no scripted fallback.
+`router.provider = "deepseek"` 会用 DeepSeek Chat Completions 替换脚本化 brain（`POST {base_url}/chat/completions`，`Authorization: Bearer $DEEPSEEK_API_KEY`，模型 `deepseek-flash`，关闭 thinking）。Router 只能调用 `spawn`、`list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe` 和 `unsubscribe`。缺少密钥时，`tigercat acp` 在发出任何请求之前就停下来。提供者出错时，ACP prompt 上返回 `Router failed: ...`。这条路径没有 dry-run，也没有脚本化回退。
 
 ```toml
 default_worker_runtime = "claude-code"
@@ -76,19 +78,19 @@ model = "deepseek-flash"
 api_key_env = "DEEPSEEK_API_KEY"
 ```
 
-These calls are documentation-backed and have not been live-tested from this repo. A provider HTTP error reports the status only. The response body is discarded.
+这些调用有文档依据，但还没有从本仓库做过实机测试。提供者的 HTTP 错误只报告状态码。响应体会被丢掉。
 
-Claude Code, from [Integrate with Claude Code](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code): `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`, `ANTHROPIC_AUTH_TOKEN` set to the DeepSeek key, and `ANTHROPIC_MODEL=deepseek-flash[1m]` (plus the default opus/sonnet/haiku and subagent variables on that page). The [Messages API](https://api-docs.deepseek.com/api/create-message) accepts `x-api-key` or `Authorization: Bearer` and model `deepseek-flash`. That is not Chat Completions.
+Claude Code，依据 [Integrate with Claude Code](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code)：`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`，`ANTHROPIC_AUTH_TOKEN` 设为 DeepSeek 的密钥，以及 `ANTHROPIC_MODEL=deepseek-flash[1m]`（再加上那一页上默认的 opus/sonnet/haiku 和 subagent 变量）。[Messages API](https://api-docs.deepseek.com/api/create-message) 接受 `x-api-key` 或 `Authorization: Bearer`，模型是 `deepseek-flash`。那不是 Chat Completions。
 
-Codex, from [Integrate with Codex](https://api-docs.deepseek.com/quick_start/agent_integrations/codex) and [Using the Responses API](https://api-docs.deepseek.com/guides/responses_api): Codex speaks the Responses API. The documented provider block is `base_url = "https://api.deepseek.com/"`, `wire_api = "responses"`, `model = "deepseek-flash"`, a `~/.codex/models.json` catalog, and `experimental_bearer_token` set to the DeepSeek key. This repo does not assume `CODEX_API_KEY` or `OPENAI_API_KEY` selects that provider.
+Codex，依据 [Integrate with Codex](https://api-docs.deepseek.com/quick_start/agent_integrations/codex) 和 [Using the Responses API](https://api-docs.deepseek.com/guides/responses_api)：Codex 说的是 Responses API。文档里的提供者配置是 `base_url = "https://api.deepseek.com/"`、`wire_api = "responses"`、`model = "deepseek-flash"`、一份 `~/.codex/models.json` 目录，以及把 `experimental_bearer_token` 设为 DeepSeek 的密钥。本仓库不把 `CODEX_API_KEY` 或 `OPENAI_API_KEY` 当成选择了那个提供者。
 
-`deepseek-flash` is the model id on [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing). Tool calls use `POST /chat/completions` ([Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion), [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls)). Thinking defaults on; this Router sends `{"thinking": {"type": "disabled"}}` so `tool_choice` stays on the non-thinking path ([Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)).
+`deepseek-flash` 是 [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing) 上的模型 id。工具调用使用 `POST /chat/completions`（[Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion)、[Tool Calls](https://api-docs.deepseek.com/guides/tool_calls)）。Thinking 默认开启；这个 Router 发送 `{"thinking": {"type": "disabled"}}`，让 `tool_choice` 留在非 thinking 路径上（[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)）。
 
-`spawn` launches the real adapter command. A missing binary or key fails in the open. The ACP prompt does not wait for the Worker: holding `session/prompt` open would leave cc-connect busy and queue the next Feishu message. When the Worker finishes later, TigerCat runs `cc-connect send --stdin` if `CC_SESSION_KEY` is set (cc-connect injects that when it starts an ACP agent). That posts to the daemon socket, which sends on the platform session. A `session/update` after the prompt returns is not that send. Without `CC_SESSION_KEY` the prompt says the result will not reach Feishu.
+`spawn` 启动真实的 adapter 命令。缺少二进制或密钥时，失败是敞着的。ACP prompt 不会等 Worker：把 `session/prompt` 一直开着会让 cc-connect 占线，并把下一条飞书消息排进队列。Worker 稍后结束时，如果设置了 `CC_SESSION_KEY`，TigerCat 会运行 `cc-connect send --stdin`（cc-connect 在启动 ACP agent 时注入这个变量）。那会发到 daemon 的套接字，再由它在平台会话上发送。prompt 返回之后的 `session/update` 不是那次发送。没有 `CC_SESSION_KEY` 时，prompt 会说明结果到不了飞书。
 
 ## cc-connect
 
-Register TigerCat as a generic ACP agent. The host owns the Feishu or DingTalk channel.
+把 TigerCat 注册为一个通用 ACP agent。飞书或钉钉频道归宿主所有。
 
 ```toml
 type = "acp"
@@ -96,36 +98,31 @@ cmd = "tigercat"
 args = ["acp"]
 ```
 
-Pass a Thread id on the prompt `_meta.thread_id` when the host knows the topic or pull request. Without one, the upstream session is its own Thread (`acp:<sessionId>`).
+宿主知道话题或 pull request 时，把 Thread id 放在 prompt 的 `_meta.thread_id` 上。如果没有，上游会话自己就是一个 Thread（`acp:<sessionId>`）。
 
-## Operations
+## 运维
 
-Foreground start, stop, and restart, credential separation, and the scripted
-demo config are in [docs/operations.md](docs/operations.md).
-[examples/config.example.toml](examples/config.example.toml) leaves
-`coordinator_runtime` unset. It is not a model Router, and this repository
-does not ship one. There is no `start` or `stop` subcommand. `runtime add
---env` writes plaintext into `config.toml`; do not put API keys there.
+前台的启动、停止和重启，凭据如何分开，以及脚本化演示的配置，写在 [docs/operations.md](docs/operations.md)。[examples/config.example.toml](examples/config.example.toml) 没有设置 `coordinator_runtime`。它不是模型 Router，本仓库也不附带这样一个程序。没有 `start` 或 `stop` 子命令。`runtime add --env` 会把明文写进 `config.toml`；不要把 API key 放在那里。
 
-## What week 1 does
+## 第 1 周做什么
 
-Triggers are admitted by the ordered rule engine, then routed:
+Trigger 先经有序规则引擎准入，再按下面的方式路由：
 
-- `ignore` is dropped. Zero Router calls.
-- A Thread that already has a subscribed Worker gets later Triggers directly. No Router turn.
-- Anything else is batched into the Router's next turn. `candidate` is only judged there; `respond` with no subscriber is spawned.
-- `spawn` returns `{ "status": "started" }` immediately. Results are pushed when the Router is idle, and queued into one batch when it is busy. `wait` is optional.
-- A stop phrase from the rules cancels the current turn (`session/cancel`) and **keeps** subscriptions, so "stop, do X instead" still reaches that Worker.
-- `interrupt` cancels the current turn and keeps subscriptions. `kill`, a crash, or a restart that finds no live Worker process drops every subscription and keeps the worktree. The Thread goes back through the Router.
+- `ignore` 会被丢弃。Router 调用次数为零。
+- 已经有 Worker 订阅的 Thread，之后的 Trigger 直接送给它。不产生 Router 回合。
+- 其余内容并入 Router 的下一回合。`candidate` 只在那里判定；没有订阅者的 `respond` 会被 spawn。
+- `spawn` 立即返回 `{ "status": "started" }`。Router 空闲时推送结果，忙碌时排进同一批。`wait` 是可选的。
+- 规则中的停止短语会取消当前回合（`session/cancel`），并**保留**订阅。因此「停，改为做 X」仍然能到达那个 Worker。
+- `interrupt` 取消当前回合，并保留订阅。`kill`、崩溃，或者重启时找不到仍在运行的 Worker 进程，会丢掉全部订阅，并保留 worktree。该 Thread 重新走 Router。
 
-`worker.turn_end.awaitingInput` is a TigerCat annotation, not an ACP field. The agent's `stopReason` is stored as ACP sent it (usually `end_turn`). TigerCat sets `awaitingInput` only when that reason is `end_turn` and the Worker's text looks like a question or a request for clarification.
+`worker.turn_end.awaitingInput` 是 TigerCat 加上的注解，不是 ACP 字段。agent 的 `stopReason` 按 ACP 送来的原样保存（通常是 `end_turn`）。只有当这个原因是 `end_turn`，并且 Worker 的文本看起来像提问或请求澄清时，TigerCat 才设置 `awaitingInput`。
 
-State lives in `node:sqlite` behind a `Store` interface. The process keeps sockets and timers only. A restart reloads Threads and any undelivered Router queue. Worker processes do not survive it, so their subscriptions are released.
+状态放在 `Store` 接口背后的 `node:sqlite` 里。进程只保留 socket 和 timer。重启会重新加载 Thread，以及尚未送达的 Router 队列。Worker 进程不会在重启后留下来，因此它们的订阅会被释放。
 
-## Tests
+## 测试
 
 ```bash
 npm test
 ```
 
-`npm run test:tck` runs [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0` against `tigercat acp` (needs [uv](https://docs.astral.sh/uv/)). On Windows that pin calls `os.killpg` in its own teardown. The script prints those requirement ids as **UNVERIFIED** and exits non-zero. A killpg teardown failure fails the gate. Replay fixtures use the test engineer's JSONL schema; the harness is `test/harness/`. Fixture files are owned by QA and are not edited here to erase label diffs.
+`npm run test:tck` 会对 `tigercat acp` 运行 [acp-tck](https://github.com/agentclientprotocol/acp-tck) `v0.4.0`（需要 [uv](https://docs.astral.sh/uv/)）。在 Windows 上，这个钉住的版本会在自己的 teardown 里调用 `os.killpg`。脚本把那些 requirement id 打印为 **UNVERIFIED**，并以非零状态退出。killpg teardown 失败会使门禁失败。回放 fixture 使用测试工程师的 JSONL schema；harness 位于 `test/harness/`。Fixture 文件归 QA 所有，这里不会为了抹平标签差异而去改它们。

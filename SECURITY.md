@@ -1,36 +1,24 @@
-# Security policy
+# 安全策略
 
-## Reporting a vulnerability
+[简体中文](SECURITY.md) | [English](docs/i18n/en/SECURITY.md) | [日本語](docs/i18n/ja/SECURITY.md) | [한국어](docs/i18n/ko/SECURITY.md) | [Español](docs/i18n/es/SECURITY.md)
 
-Report security vulnerabilities privately with
-[GitHub Private Vulnerability Reporting](https://github.com/tornado1110/tigercat/security/advisories/new).
+## 报告漏洞
 
-Please do not open a public issue, discussion, or pull request for a suspected
-vulnerability. Give the maintainers time to confirm and fix it before any
-public write-up.
+请通过 [GitHub Private Vulnerability Reporting](https://github.com/tornado1110/tigercat/security/advisories/new) 私下报告安全漏洞。
 
-Never post secrets in issues, pull requests, commits, logs, or discussions.
-That includes API keys, tokens, passwords, session cookies, and private
-endpoints. If a secret has already leaked, revoke it first, then report the
-exposure through the private channel above.
+请不要为疑似漏洞开公开的 issue、discussion 或 pull request。在任何公开说明之前，给维护者时间确认并修复。
 
-## Supported versions
+不要在 issue、pull request、提交、日志或 discussion 里发布密钥。这包括 API key、令牌、密码、会话 cookie 和私有端点。如果密钥已经泄露，先吊销它，再通过上面的私密渠道报告这次暴露。
 
-TigerCat is pre-1.0. Security fixes go into the latest release only.
+## 受支持的版本
 
-## Security model
+TigerCat 尚未到 1.0。安全修复只进入最新的发布版。
 
-TigerCat coordinates worker agents. It is not a store for credentials, and it
-does not edit a checkout itself.
+## 安全模型
 
-1. API keys and tokens are supplied via environment variables or the runtime's
-   own auth. They are never committed. Error text and event payloads are
-   redacted before they are printed or stored; the patterns and the cases
-   they do not cover are in [docs/operations.md](docs/operations.md).
-   `config.toml` is not a secret store.
-2. Credentials must never enter a model's context: not in coordinator prompts,
-   worker prompts, tool results, or event summaries.
-3. Worker permission requests default to `ask`. TigerCat does not auto-approve
-   them by default.
-4. The coordinator cannot modify code directly. It only dispatches work to
-   worker agents.
+TigerCat 协调 worker agent。它不是凭据的存放处，自己也不修改检出。
+
+1. API key 和令牌通过环境变量，或该 runtime 自己的认证提供。它们不会被提交。错误文本和事件载荷在打印或保存之前会先脱敏；具体模式，以及覆盖不到的情况，写在 [docs/operations.md](docs/operations.md)。`config.toml` 不是存放密钥的地方。
+2. 凭据绝不能进入模型的上下文：不能出现在 coordinator 的 prompt、worker 的 prompt、工具结果或事件摘要里。
+3. Worker 的权限请求默认是 `ask`。TigerCat 默认不会自动批准这些请求。
+4. coordinator 不能直接改代码。它只把工作分发给 worker agent。

@@ -1,33 +1,30 @@
-# Operating TigerCat
+# 运行 TigerCat
 
-This page is the operator guide for the process that is in this repository
-today. It does not add commands. If a command is not listed in `tigercat --help`,
-it does not exist.
+[简体中文](operations.md) | [English](i18n/en/operations.md) | [日本語](i18n/ja/operations.md) | [한국어](i18n/ko/operations.md) | [Español](i18n/es/operations.md)
 
-Nothing here has been run against a live DeepSeek account, Claude Code, Codex,
-cc-connect, or Feishu. Those rows are marked unverified. Checks that CI runs
-are marked tested.
+这一页说明本仓库今天这个进程怎么操作。它不增加命令。`tigercat --help` 里没有列出的命令，就不存在。
 
-## What is implemented
+这里没有任何一项对着真实的 DeepSeek 账号、Claude Code、Codex、cc-connect 或飞书跑过。那些行标成未验证。CI 会跑的检查标成已测试。
 
-| Behavior | Status |
+## 已经实现的行为
+
+| 行为 | 状态 |
 | --- | --- |
-| `tigercat acp` speaks ACP on stdin/stdout | implemented; upstream conformance is `npm run test:tck` where that harness can run |
-| Built-in `claude-code` and `codex` profiles | implemented; CI handshakes them with `test/stub-agent.ts`, not the vendor binaries |
-| `runtime test` with no vendor binary | tested; dry-run agent, `vendorExecuted: false`, no API key read |
-| `runtime test` with `TIGERCAT_CLAUDE_BIN` / `TIGERCAT_CODEX_BIN` or `TIGERCAT_RUNTIME_LIVE=1` | implemented; not run in CI and not run for this document |
-| Scripted Router when `coordinator_runtime` is unset | tested with the in-process scripted brain |
-| ACP Router process named by `coordinator_runtime` | implemented (`launchCoordinator`); not run against a real model |
-| sqlite Threads, event log, and pending Router queue survive a new process | implemented in `Engine.start` |
-| Worker ACP sessions survive a restart | not implemented; `loadSession` is advertised as false |
-| Orphan worker processes reaped on the next start | not implemented |
-| Feishu or DingTalk inside TigerCat | not implemented; those channels stay in the host |
-| DeepSeek Chat Completions Router (`router.provider = "deepseek"`) | implemented; reads `DEEPSEEK_API_KEY`; not live-tested |
+| `tigercat acp` 在 stdin/stdout 上说 ACP | 已实现；上游一致性是 `npm run test:tck`，在那个 harness 跑得起来的地方 |
+| 内置的 `claude-code` 和 `codex` profile | 已实现；CI 用 `test/stub-agent.ts` 和它们握手，不是厂商二进制 |
+| 没有厂商二进制时的 `runtime test` | 已测试；dry-run agent，`vendorExecuted: false`，不读取 API key |
+| 带 `TIGERCAT_CLAUDE_BIN` / `TIGERCAT_CODEX_BIN` 或 `TIGERCAT_RUNTIME_LIVE=1` 的 `runtime test` | 已实现；CI 里没跑，写这篇文档时也没跑 |
+| `coordinator_runtime` 留空时的脚本化 Router | 已用进程内的脚本化 brain 测试过 |
+| `coordinator_runtime` 点名的 ACP Router 进程 | 已实现（`launchCoordinator`）；没有对着真实模型跑过 |
+| sqlite 里的 Thread、事件日志和未送达的 Router 队列在新进程里还在 | 已实现，在 `Engine.start` 里 |
+| Worker 的 ACP 会话在重启后还在 | 未实现；对外声明 `loadSession` 为 false |
+| 下次启动时回收孤儿 worker 进程 | 未实现 |
+| TigerCat 内部的飞书或钉钉 | 未实现；那些频道留在宿主里 |
+| DeepSeek Chat Completions Router（`router.provider = "deepseek"`） | 已实现；读取 `DEEPSEEK_API_KEY`；未做实机测试 |
 
-## Layout
+## 布局
 
-TigerCat is one foreground process. There is no `start`, `stop`, `restart`,
-or service unit in this repository.
+TigerCat 是一个前台进程。本仓库里没有 `start`、`stop`、`restart`，也没有 service unit。
 
 ```bash
 tigercat --help
@@ -36,52 +33,26 @@ tigercat acp
 tigercat acp --config /path/to/config.toml
 ```
 
-`TIGERCAT_CONFIG` is the same override as `--config` when the flag is omitted.
-The default file is `~/.tigercat/config.toml`. If that file is missing, built-in
-defaults are used and nothing is written until `runtime add` or `runtime remove`.
 
-The database is `TIGERCAT_DB`, or `tigercat.sqlite` in the same directory as the
-config path. The default is `~/.tigercat/tigercat.sqlite`. Use one process per
-database. This code opens `node:sqlite` directly and does not coordinate a
-second writer.
+省略 flag 时，`TIGERCAT_CONFIG` 和 `--config` 是同一种覆盖。默认文件是 `~/.tigercat/config.toml`。文件不存在时用内置默认值，在 `runtime add` 或 `runtime remove` 之前什么都不写。
 
-[`examples/config.example.toml`](../examples/config.example.toml) is a scripted
-demo. It does not name a Router executable. Copying it does not give you a
-model. See [Scripted demo and real Router](#scripted-demo-and-a-real-router)
-below.
+数据库是 `TIGERCAT_DB`，或者是配置路径同一目录下的 `tigercat.sqlite`。默认是 `~/.tigercat/tigercat.sqlite`。一个数据库只跑一个进程。这段代码直接打开 `node:sqlite`，不会协调第二个写入者。
 
-`runtime list` prints name, command, args, permission, and whether the row is
-a built-in. It does not print environment values.
+[`examples/config.example.toml`](../examples/config.example.toml) 是脚本化演示。它没有给出 Router 可执行文件的名字。复制它不会得到一个模型。见下面的[脚本演示和真实 Router](#脚本演示和真实-router)。
 
-## Credentials
+`runtime list` 打印名字、command、args、permission，以及这一行是不是内置的。它不打印环境变量的值。
 
-With `router.provider = "deepseek"`, `tigercat acp` reads `DEEPSEEK_API_KEY` (or the configured env name) and exits before any request when that variable is missing. That call has not been live-tested. Worker credentials are still whatever the child process already has.
+## 凭据
 
-The child environment is the parent environment plus that runtime's `env`
-table. A variable exported in the shell that starts `tigercat acp` is visible
-to the Router process and to every Worker. An `env` entry adds a variable for
-that runtime; it does not remove variables inherited from the parent. There is
-no per-runtime secret sandbox. That isolation has not been verified with live
-processes.
+`router.provider = "deepseek"` 时，`tigercat acp` 读取 `DEEPSEEK_API_KEY`（或配置里的那个环境变量名），变量缺失就在任何请求之前退出。这次调用没有做过实机测试。Worker 的凭据仍然是子进程本来就有的那些。
 
-Keep the three credential sets apart:
+子进程的环境是父进程环境，加上该 runtime 的 `env` 表。启动 `tigercat acp` 的 shell 里导出的变量，Router 进程和每个 Worker 都能看见。一条 `env` 给那个 runtime 增加一个变量，不会去掉从父进程继承的变量。没有按 runtime 隔离的密钥沙箱。这种隔离没有用真实进程验证过。
 
-1. **Router.** `router.provider = "deepseek"` calls DeepSeek Chat Completions
-   with the key from `DEEPSEEK_API_KEY`. That path has not been live-tested.
-   Do not put the key in `config.toml`. Omitting `router.provider` keeps the
-   scripted brain, which makes no model call. An ACP coordinator is still a
-   separate program you install and name with `coordinator_runtime`. Do not
-   set `router.provider` and `coordinator_runtime` together.
-2. **Workers (`claude-code`, `codex`).** Both are built in with permission
-   `ask`. Claude Code uses an existing `claude` login or `ANTHROPIC_API_KEY`.
-   Codex uses `CODEX_API_KEY` or `OPENAI_API_KEY`. Those are the vendor
-   programs' variables; TigerCat does not parse them. `TIGERCAT_CLAUDE_BIN` is
-   forwarded as `CLAUDE_CODE_EXECUTABLE`. `TIGERCAT_CODEX_BIN` is forwarded as
-   `CODEX_PATH`. To keep a Router key out of a Worker, do not export it in the
-   parent environment. Prefer each product's own login files over putting keys
-   in `runtime add --env`.
-3. **cc-connect and Feishu.** The host owns the channel. TigerCat's registration
-   is only:
+三套凭据要分开：
+
+1. **Router。** `router.provider = "deepseek"` 用 `DEEPSEEK_API_KEY` 里的密钥调用 DeepSeek Chat Completions。这条路径没有做过实机测试。不要把密钥放进 `config.toml`。不写 `router.provider` 就继续用脚本化 brain，它不会调用模型。ACP coordinator 仍然是你另外安装的程序，用 `coordinator_runtime` 点它的名字。不要同时设置 `router.provider` 和 `coordinator_runtime`。
+2. **Worker（`claude-code`、`codex`）。** 两者都内置，权限是 `ask`。Claude Code 使用已有的 `claude` 登录，或 `ANTHROPIC_API_KEY`。Codex 使用 `CODEX_API_KEY` 或 `OPENAI_API_KEY`。这些是厂商程序自己的变量，TigerCat 不解析它们。`TIGERCAT_CLAUDE_BIN` 会作为 `CLAUDE_CODE_EXECUTABLE` 往下传。`TIGERCAT_CODEX_BIN` 会作为 `CODEX_PATH` 往下传。要让 Router 的密钥不进 Worker，就不要在父进程环境里导出它。优先用各产品自己的登录文件，而不是把密钥写进 `runtime add --env`。
+3. **cc-connect 和飞书。** 频道归宿主。TigerCat 的注册只有：
 
    ```toml
    type = "acp"
@@ -89,36 +60,24 @@ Keep the three credential sets apart:
    args = ["acp"]
    ```
 
-   Do not copy Feishu tokens into TigerCat config or into `runtime env`.
-   `tigercat acp` records every upstream prompt with `source` `acp`. The first
-   default rule admits `source = "acp"` as `respond`. A Feishu thread id is
-   used only when the host sets `_meta.thread_id`; the source is still `acp`.
-   A Feishu round-trip has not been run.
 
-`runtime add --env K=V` writes the value into `config.toml` in plaintext.
-That file is not a secret store. Leave `env` empty unless the value is a
-non-secret path such as a vendor binary.
+   不要把飞书令牌抄进 TigerCat 的配置或 `runtime env`。`tigercat acp` 把每条上游 prompt 记成 `source` `acp`。第一条默认规则把 `source = "acp"` 准入为 `respond`。只有宿主设置了 `_meta.thread_id` 时才会用到飞书的 thread id；source 仍然是 `acp`。飞书往返没有跑过。
 
-Built-in workers are `ask` in code. The sample adds no runtime row, so it
-does not set `permission`. `runtime add --permission` accepts `ask`, `auto`,
-or `deny`.
+`runtime add --env K=V` 把值以明文写进 `config.toml`。那个文件不是密钥库。除非值是厂商二进制这种非密钥路径，否则把 `env` 留空。
 
-## Scripted demo and a real Router
+内置 worker 在代码里是 `ask`。示例不添加 runtime 行，所以不设置 `permission`。`runtime add --permission` 接受 `ask`、`auto` 或 `deny`。
 
-These are different. The sample file is only the first one.
+## 脚本演示和真实 Router
 
-### Scripted demo
+这是两件不同的事。示例文件只是第一件。
 
-`coordinator_runtime` stays unset. `cmdAcp` then does not call
-`launchCoordinator`. The Router is `ScriptedRouter` in this process. It spawns
-the runtime named by `default_worker_runtime` and does not call a model.
+### 脚本演示
 
-The code default for that name is the string `worker`. That name is not a
-built-in. With no config file, a trigger the scripted brain decides to spawn
-fails with `unknown runtime worker`. The sample sets `default_worker_runtime`
-to `claude-code`, which is a built-in.
+`coordinator_runtime` 保持不设置。于是 `cmdAcp` 不会调用 `launchCoordinator`。Router 是本进程里的 `ScriptedRouter`。它按 `default_worker_runtime` 点名的 runtime 去 spawn，不调用模型。
 
-The README checkout steps are:
+代码里这个名字的默认值是字符串 `worker`。这个名字不是内置的。没有配置文件时，脚本化 brain 决定 spawn 的 trigger 会失败，错误是 `unknown runtime worker`。示例把 `default_worker_runtime` 设为 `claude-code`，那是内置的。
+
+README 里的检出步骤是：
 
 ```bash
 npm install
@@ -126,9 +85,8 @@ npm run build
 npm link
 ```
 
-`bin/tigercat.js` loads `dist/cli.js`, so `npm run build` is required before
-the command can start. `npm link` is what the README uses to put `tigercat` on
-`PATH`. From the checkout, without linking:
+
+`bin/tigercat.js` 加载 `dist/cli.js`，所以命令能启动之前必须 `npm run build`。`npm link` 是 README 用来把 `tigercat` 放到 `PATH` 上的办法。在检出目录里、不 link 时：
 
 ```bash
 node bin/tigercat.js --help
@@ -136,7 +94,8 @@ node bin/tigercat.js runtime list
 node bin/tigercat.js acp
 ```
 
-Copying the sample is optional. It still does not start a model:
+
+复制示例是可选的。它仍然不会启动一个模型：
 
 ```bash
 mkdir -p ~/.tigercat
@@ -145,175 +104,108 @@ tigercat runtime list
 tigercat acp
 ```
 
-`runtime list` then shows the built-ins `claude-code` and `codex`. It does not
-show a Router command, because the sample does not add one. `tigercat acp`
-stays in the foreground and speaks newline-delimited JSON-RPC on stdin and
-stdout. With no `claude` binary and `TIGERCAT_RUNTIME_LIVE` unset, a worker
-the scripted brain spawns as `claude-code` uses the dry-run agent. That path
-reads no API key. It is still not a model.
 
-### Real ACP Router
+这时 `runtime list` 会显示内置的 `claude-code` 和 `codex`。它不会显示 Router 命令，因为示例没有添加。`tigercat acp` 停在前台，在 stdin 和 stdout 上说换行分隔的 JSON-RPC。没有 `claude` 二进制且没有设置 `TIGERCAT_RUNTIME_LIVE` 时，脚本化 brain 以 `claude-code` spawn 的 worker 用的是 dry-run agent。这条路径不读 API key。它仍然不是模型。
 
-Prerequisite, not provided here: an ACP agent executable you installed and
-configured yourself. This repository does not ship one, does not contain a
-program named `router-acp`, and does not document how to install DeepSeek or
-any other model.
+### 真实的 ACP Router
 
-When that program is already on the machine, register it with the command
-`tigercat --help` already lists. The angle brackets are placeholders, not a
-command to copy:
+前提，这里不提供：一个你自己安装并配置好的 ACP agent 可执行文件。本仓库不附带它，里面没有名为 `router-acp` 的程序，也不写如何安装 DeepSeek 或任何其他模型。
+
+那份程序已经在机器上时，用 `tigercat --help` 已经列出的命令注册它。尖括号是占位符，不是可以照抄的命令：
 
 ```bash
 tigercat runtime add <name> --command <existing-acp-agent> --permission ask
 ```
 
-Then set `coordinator_runtime` to `<name>` in the config file you actually
-load. `tigercat acp` spawns that command. If the command is not found, startup
-fails with `bad_runtime`. Do not write a placeholder into `config.toml` and
-treat it as a working Router.
 
-cc-connect, or any other ACP client, is the parent of `tigercat acp`. Logs and
-ACP traffic share stdin and stdout. Do not pipe a secret into the prompt. The
-host snippet in the README (`type = "acp"`, `cmd = "tigercat"`, `args =
-["acp"]`) is not a file this repository loads, and a Feishu round-trip has not
-been run. This page does not add cc-connect install steps.
+然后在你实际加载的配置文件里把 `coordinator_runtime` 设为 `<name>`。`tigercat acp` 会 spawn 那个命令。找不到命令时，启动失败，错误是 `bad_runtime`。不要把占位符写进 `config.toml` 再把它当成能用的 Router。
 
-## Start
+cc-connect 或任何其他 ACP 客户端是 `tigercat acp` 的父进程。日志和 ACP 流量共用 stdin 和 stdout。不要把密钥管道进 prompt。README 里的宿主片段（`type = "acp"`、`cmd = "tigercat"`、`args = ["acp"]`）不是本仓库会加载的文件，飞书往返也没有跑过。这一页不加 cc-connect 的安装步骤。
 
-`tigercat acp` is the foreground process. There is no daemon command.
+## 启动
 
-`tigercat acp` uses `process.cwd()` as the workspace root. Worker directories
-are created under that tree: `.tigercat/worktrees/<workerId>` inside a git
-checkout, otherwise `.tigercat/workers/<workerId>`.
+`tigercat acp` 就是前台进程。没有守护进程命令。
 
-Check the built-ins before involving a model. With no `claude` or `codex` on
-`PATH` and `TIGERCAT_RUNTIME_LIVE` unset, this does not read an API key:
+`tigercat acp` 用 `process.cwd()` 作为工作区根。Worker 目录建在那棵树下：git 检出里是 `.tigercat/worktrees/<workerId>`，否则是 `.tigercat/workers/<workerId>`。
+
+在牵涉模型之前先检查内置项。`PATH` 上没有 `claude` 或 `codex`，且没有设置 `TIGERCAT_RUNTIME_LIVE` 时，下面的命令不读 API key：
 
 ```bash
 tigercat runtime test claude-code
 tigercat runtime test codex
 ```
 
-The JSON report has `mode` `dry-run` and `vendorExecuted` false. A real adapter
-launch is the manual command in `tigercat --help`. This document's tests did
-not execute it.
 
-## Stop
+JSON 报告里是 `mode` `dry-run` 和 `vendorExecuted` false。真实 adapter 的启动方式是 `tigercat --help` 里的手动命令。写这篇文档时的测试没有执行它。
 
-There is no stop subcommand.
+## 停止
 
-A clean path is the ACP client closing stdin. `serveUpstream` then returns,
-`engine.close()` asks each live worker handle to exit, and the IPC listener
-and sqlite handle are closed.
+没有 stop 子命令。
 
-That path also schedules `process.exit(0)` after 500ms, and again when the
-upstream MCP clients have closed. Worker teardown is best-effort inside that
-window. It is not a guaranteed drain.
+干净的路径是 ACP 客户端关掉 stdin。然后 `serveUpstream` 返回，`engine.close()` 要求每个仍活着的 worker handle 退出，IPC 监听和 sqlite handle 被关掉。
 
-SIGINT and SIGTERM have no handler in this code. On POSIX, worker processes
-are spawned detached, so a signal that kills only the TigerCat process can
-leave them behind. The next start does not look at saved pids and does not
-kill them.
+这条路径还会在 500ms 后安排 `process.exit(0)`，并在上游 MCP 客户端都关掉时再安排一次。Worker 的拆除在这个窗口里是尽力而为。它不是保证排空。
 
-## Restart and recovery
+这段代码里 SIGINT 和 SIGTERM 没有处理函数。在 POSIX 上，worker 进程是 detached 启动的，所以只杀死 TigerCat 进程的信号会把它们留在后面。下次启动不看保存的 pid，也不杀它们。
 
-Restart means: stop the foreground process, then run `tigercat acp` again on
-the same config and database.
+## 重启和恢复
 
-`Engine.start` then:
+重启的意思是：停下前台进程，然后用同一份配置和数据库再跑 `tigercat acp`。
 
-- leaves an existing Router session row in place, or inserts one
-- returns in-flight Router queue rows to pending and sets `router_busy` to `0`
-- marks every non-terminal Worker `interrupted`, drops its subscriptions, and
-  records `worker.error` with `worker process was not alive after restart`
+然后 `Engine.start`：
 
-Threads and the event log remain. The worktree directory is left on disk.
-`removeWorkspace` exists and is not called on this path.
+- 已有的 Router 会话行留在原地，或者插入一行
+- 把还在途中的 Router 队列行退回 pending，并把 `router_busy` 设为 `0`
+- 把每个非终态 Worker 标成 `interrupted`，丢掉它的订阅，并记一条 `worker.error`，内容是 `worker process was not alive after restart`
 
-What does not happen:
+Thread 和事件日志还在。worktree 目录留在磁盘上。`removeWorkspace` 存在，但这条路径不调用它。
 
-- `session/load` is not called. The upstream agent advertises `loadSession: false`.
-  `runtime test` reports `degraded: ["loadSession"]`. A Worker cannot resume
-  the previous ACP session.
-- Saved pids are not reaped.
-- A Worker that was mid-turn is not resumed. Its Thread goes back through the
-  Router because the subscription was released.
+不会发生的事：
 
-The one-shot commands `list`, `send`, `read`, `interrupt`, `wait`, `kill`,
-`subscribe`, `unsubscribe`, and `spawn` open the same database and call
-`Engine.start` themselves. Running `tigercat list` against a database that
-still has non-terminal Workers marks those Workers interrupted, even if
-another `tigercat acp` still has them. Do not point those commands at the
-database of a running process. There is no read-only status command.
+- 不调用 `session/load`。上游 agent 声明 `loadSession: false`。`runtime test` 报告 `degraded: ["loadSession"]`。Worker 不能恢复上一次 ACP 会话。
+- 不回收保存的 pid。
+- 回合中途的 Worker 不会续上。它的 Thread 重新走 Router，因为订阅已经释放。
 
-## Logging
+一次性命令 `list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe`、`unsubscribe` 和 `spawn` 会打开同一个数据库，并自己调用 `Engine.start`。对一个还有非终态 Worker 的数据库跑 `tigercat list`，会把那些 Worker 标成 interrupted，哪怕另一个 `tigercat acp` 还握着它们。不要把这些命令指向正在运行的进程的数据库。没有只读的状态命令。
 
-Event payloads and CLI error text go through redaction before they are stored
-or printed:
+## 日志
 
-- exact values from runtime `env` whose names contain `key`, `token`,
-  `secret`, `password`, or `credential`
-- the same kind of variable from the parent environment, when the value is at
-  least 8 characters and has no quote or brace
-- the localhost IPC token passed to `tigercat mcp --token`
-- `Authorization` bearer/basic/digest headers, `x-api-key` / `api_key`
-  assignments, `NAME=value` for secret-like names, matching JSON fields, and
-  `sk-` / `sk-ant-` / `sk-proj-` tokens
+事件载荷和 CLI 错误文本在保存或打印之前会经过脱敏：
 
-Provider stderr from a failed handshake is included in the `bad_runtime`
-error only after that scrub. The unit tests use fixed fake strings such as
-`fake-bearer-token-0001`. They do not call a provider.
+- runtime `env` 里名字含 `key`、`token`、`secret`、`password` 或 `credential` 的精确值
+- 父进程环境里同类变量，当值至少 8 个字符且不含引号或花括号
+- 传给 `tigercat mcp --token` 的本机 IPC 令牌
+- `Authorization` 的 bearer/basic/digest 头，`x-api-key` / `api_key` 赋值，密钥类名字的 `NAME=value`，对应的 JSON 字段，以及 `sk-` / `sk-ant-` / `sk-proj-` 令牌
 
-Prompt text is stored as it was submitted. `trigger.ingested` does not copy
-that text, but the trigger row and the Router queue do. Redaction does not
-rewrite a prompt. A key pasted into a message is still in sqlite and can be
-handed to the Router. Do not paste keys into prompts.
+握手失败时，提供者的 stderr 只有在这次擦除之后才会放进 `bad_runtime` 错误。单元测试用的是固定的假字符串，例如 `fake-bearer-token-0001`。它们不调用提供者。
 
-Limits, unverified against a live provider: a secret printed in a shape that
-matches none of the above, a value shorter than 4 characters (8 for the parent
-environment), or a value that contains a quote or brace can still appear. Do
-not rely on redaction as the only control. Do not put keys in prompts, rule
-text, or `config.toml`.
+prompt 文本按提交时的原样保存。`trigger.ingested` 不复制那段文本，但 trigger 行和 Router 队列会。脱敏不会改写 prompt。粘进消息里的密钥仍然在 sqlite 里，并且可能交给 Router。不要把密钥粘进 prompt。
 
-`runtime list` does not print `env`. The config file still contains it if you
-wrote it.
+限制，未对照真实提供者验证：印成上面任何一种形状都对不上的密钥、短于 4 个字符的值（父进程环境是 8）、或含有引号或花括号的值，仍然可能出现。不要把脱敏当成唯一控制。不要把密钥放进 prompt、规则文本或 `config.toml`。
 
-## Troubleshooting
+`runtime list` 不打印 `env`。如果你写过，配置文件里仍然有它。
 
-`runtime test` JSON `ok: false` with `mode: "dry-run"` means the dry-run
-process failed, not that Claude Code or Codex rejected a key. `mode:
-"adapter"` means this process launched the adapter. `vendorExecuted: false`
-means the vendor binary was not run.
+## 排障
 
-`unknown runtime <name>` means the name is neither a built-in nor a `command`
-in the config file that was loaded. Check `--config` and `TIGERCAT_CONFIG`.
+`runtime test` 的 JSON 里 `ok: false` 且 `mode: "dry-run"`，表示 dry-run 进程失败了，不是 Claude Code 或 Codex 拒绝了密钥。`mode: "adapter"` 表示这个进程启动了 adapter。`vendorExecuted: false` 表示没有运行厂商二进制。
 
-`max concurrency <n> reached` is `max_concurrency` in the config (default 4).
-It counts Workers in `starting` or `running`.
+`unknown runtime <name>` 表示这个名字既不是内置的，也不是所加载配置文件里的 `command`。检查 `--config` 和 `TIGERCAT_CONFIG`。
 
-After a crash, `tigercat list --json` will itself run recovery and the Workers
-will show `interrupted`. Start `tigercat acp` only after that, or start `acp`
-directly and let it do the same recovery. Do not expect the old ACP session
-ids to work.
+`max concurrency <n> reached` 是配置里的 `max_concurrency`（默认 4）。它计算处于 `starting` 或 `running` 的 Worker。
 
-If two `tigercat acp` processes were pointed at one sqlite file, stop both.
-The code does not repair a database that two writers used.
+崩溃之后，`tigercat list --json` 自己会跑恢复，Worker 会显示 `interrupted`。在那之后再启动 `tigercat acp`，或者直接启动 `acp` 让它做同样的恢复。不要指望旧的 ACP 会话 id 还能用。
 
-Permission prompts stay on the Worker until something answers them. Nothing in
-`tigercat acp` auto-answers a Worker `ask` policy. A stuck permission looks
-like a Worker that never reaches `worker.turn_end`.
+如果两个 `tigercat acp` 进程指向同一个 sqlite 文件，把两个都停掉。这段代码不会修复两个写入者用过的数据库。
 
-## Gaps in this tree
+权限提示会留在 Worker 上，直到有东西回答。`tigercat acp` 里没有任何东西会自动回答 Worker 的 `ask` 策略。卡住的权限看起来像一个永远到不了 `worker.turn_end` 的 Worker。
 
-- No Router executable, and no install steps for one. The only Router that
-  runs with nothing else installed is the in-process scripted brain.
-- A DeepSeek Chat Completions Router is implemented (`router.provider = "deepseek"`, key from `DEEPSEEK_API_KEY`). It has not been live-tested. The scripted brain remains the default.
-- The default worker runtime name `worker` is not a built-in.
-- `session/load` is off. A restart does not resume a Worker ACP session and
-  does not reap saved pids. SIGINT and SIGTERM have no handler.
-- `session.pid` is written after the worker handshake returns. This pull
-  request does not change that, and it does not add a wait. A Windows test
-  that reads the pid too early is a process-startup race for development.
-- One `node:sqlite` handle per database. A second writer is not coordinated.
-- Prompt text is stored as submitted.
-- Live DeepSeek, Claude Code, Codex, cc-connect, and Feishu have not been run.
+## 这棵树里还没有的东西
+
+- 没有 Router 可执行文件，也没有它的安装步骤。什么都不再装时，唯一会跑的 Router 是进程内的脚本化 brain。
+- DeepSeek Chat Completions Router 已实现（`router.provider = "deepseek"`，密钥来自 `DEEPSEEK_API_KEY`）。它没有做过实机测试。默认仍然是脚本化 brain。
+- 默认的 worker runtime 名字 `worker` 不是内置的。
+- `session/load` 是关的。重启不会恢复 Worker 的 ACP 会话，也不会回收保存的 pid。SIGINT 和 SIGTERM 没有处理函数。
+- `session.pid` 在 worker 握手返回之后才写入。这个 pull request 没有改这一点，也没有加等待。过早读取 pid 的 Windows 测试，是开发阶段的进程启动竞态。
+- 每个数据库一个 `node:sqlite` handle。第二个写入者不被协调。
+- prompt 文本按提交时的原样保存。
+- 真实的 DeepSeek、Claude Code、Codex、cc-connect 和飞书都没有跑过。
