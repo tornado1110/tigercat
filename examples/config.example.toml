@@ -1,0 +1,19 @@
+# Scripted demo. Not a real model Router.
+#
+# TigerCat does not load this file unless you pass --config or set
+# TIGERCAT_CONFIG. coordinator_runtime is omitted on purpose. `tigercat acp`
+# then uses the in-process scripted brain. That brain does not call a model.
+#
+# This repository does not ship a Router executable. A real ACP Router is a
+# program you install and configure yourself. Do not put a made-up command
+# name in this file. See docs/operations.md.
+#
+# Do not put API keys, tokens, or Feishu credentials here.
+
+idle_timeout_ms = 600000
+cancel_grace_ms = 5000
+summary_max_chars = 800
+# Built-in worker name. The code default is the string "worker", which is
+# not a built-in and fails at spawn. The scripted demo points at claude-code.
+default_worker_runtime = "claude-code"
+max_concurrency = 4

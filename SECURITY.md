@@ -24,8 +24,10 @@ TigerCat coordinates worker agents. It is not a store for credentials, and it
 does not edit a checkout itself.
 
 1. API keys and tokens are supplied via environment variables or the runtime's
-   own auth. They are never committed, never logged, and never included in
-   events.
+   own auth. They are never committed. Error text and event payloads are
+   redacted before they are printed or stored; the patterns and the cases
+   they do not cover are in [docs/operations.md](docs/operations.md).
+   `config.toml` is not a secret store.
 2. Credentials must never enter a model's context: not in coordinator prompts,
    worker prompts, tool results, or event summaries.
 3. Worker permission requests default to `ask`. TigerCat does not auto-approve
