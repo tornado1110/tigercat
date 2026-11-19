@@ -53,12 +53,31 @@ describe("m0 trigger fixtures", () => {
 
   for (const name of jsonlFiles) {
     it(`${name}: 0 mismatches at durationMs 0, and ignore never reaches the Router`, async () => {
+      const started = performance.now();
       await replayM0(name, (observations) => {
         expect(observations.flatMap((observation) => mismatches(observation))).toEqual([]);
         expect(ignoredThatReachedRouter(observations)).toEqual([]);
       });
-    }, 120_000);
+      if (name === "stream-seed1.jsonl") {
+        console.log(`stream-seed1.jsonl replay ${Math.round(performance.now() - started)}ms`);
+      }
+    });
   }
+
+  it("an ignore-only replay does not poll setTimeout(0) inside settle", async () => {
+    let zeroDelayTimers = 0;
+    const original = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: TimerHandler, ms?: number, ...args: unknown[]) => {
+      if (ms === 0) zeroDelayTimers += 1;
+      return original(fn as () => void, ms, ...args);
+    }) as typeof setTimeout;
+    try {
+      await replayM0("chatter-only.jsonl", () => undefined);
+      expect(zeroDelayTimers).toBe(0);
+    } finally {
+      globalThis.setTimeout = original;
+    }
+  });
 
   it("chatter-only.jsonl makes 0 Router decisions and no model call", async () => {
     // startHarness does not set coordinatorRuntime and does not call
