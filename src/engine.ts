@@ -1,4 +1,6 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { access } from "node:fs/promises";
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import { deriveAwaitingInput } from "./awaiting.js";
 import { AcpRouterBrain, ScriptedRouter, type RouterBrain, type ToolApi } from "./brains.js";
@@ -6,13 +8,13 @@ import { admit } from "./filter.js";
 import type { Clock, ClockTimer } from "./clock.js";
 import { TigerError } from "./errors.js";
 import { newId } from "./ids.js";
-import { decidePermission } from "./permissions.js";
+import { decidePermission, type PermissionOption } from "./permissions.js";
 import { SecretRegistry } from "./redact.js";
 import { resolveRuntime } from "./builtins.js";
 import type { LaunchContext, RuntimeFactory, RuntimeHandle } from "./runtime.js";
 import { spill } from "./spill.js";
 import { acceptsSend, assertTransition, isTerminal } from "./state.js";
-import type { Store } from "./store.js";
+import type { Store, TriggerIngestResult } from "./store.js";
 import { optionalNumber, optionalString, requireString } from "./tools.js";
 import type {
   AppConfig,
@@ -30,6 +32,20 @@ import type {
 import { ROUTER_SESSION_ID } from "./types.js";
 import { prepareWorkspace, type Workspace } from "./worktree.js";
 
+function ingressFingerprint(input: TriggerInput): string {
+  // Defaulted fields have the same meaning on a provider's retry. Arrival
+  // time is deliberately excluded; timestamp is the external event's time.
+  return createHash("sha256").update(JSON.stringify([
+    input.thread,
+    input.author,
+    input.text,
+    input.timestamp,
+    input.kind ?? "im.message",
+    input.isBot ?? false,
+    input.replyTo ?? null,
+  ])).digest("hex");
+}
+
 export interface EngineOptions {
   store: Store;
   clock: Clock;
@@ -40,17 +56,40 @@ export interface EngineOptions {
   mcpLaunch?: { command: string; argsPrefix: string[] };
   /** Base directory for worker workspaces when spawn has no cwd. */
   workspaceRoot?: string;
+  /** Independent human approval deadline; no response ever implies approval. */
+  permissionTimeoutMs?: number;
 }
 
-export interface IngestResult {
-  action: "respond" | "candidate" | "ignore";
-  triggerId: string;
-  threadId: string;
-  deliveredTo: string[];
-  router: boolean;
-  interrupt: boolean;
-  rule: string | null;
+export interface PendingPermission {
+  permissionId: string;
+  workerId: string;
+  role: "router" | "worker";
+  toolCallId: string;
+  title: string;
+  kind: string;
+  input?: unknown;
+  options: PermissionOption[];
+  createdAt: number;
+  expiresAt: number;
 }
+
+export interface PermissionResponseInput {
+  workerId: string;
+  permissionId: string;
+  decision: { outcome: "selected"; optionId: string; optionKind: string } | { outcome: "cancelled" };
+}
+
+export type PermissionHandler = (request: PendingPermission) => void | Promise<void>;
+
+interface PermissionWaiter {
+  request: PendingPermission;
+  /** Public IDs may be opaque replacements for secret-bearing native IDs. */
+  nativeOptions: Map<string, PermissionOption>;
+  resolve: (response: RequestPermissionResponse) => void;
+  timer: ClockTimer;
+}
+
+export type IngestResult = TriggerIngestResult;
 
 type Listener = (event: TigerEvent) => void;
 type Hook = (event: TigerEvent) => void | Promise<void>;
@@ -61,6 +100,8 @@ interface LiveWorker {
   stall?: ClockTimer;
   grace?: ClockTimer;
   busy: boolean;
+  pumping: boolean;
+  pumpAgain: boolean;
   terminalEmitted: boolean;
   /** Set for `kill()` so the process exit is not treated as a crash. */
   suppressExit: boolean;
@@ -81,12 +122,14 @@ export class Engine {
   private readonly live = new Map<string, LiveWorker>();
   private readonly hooks = new Set<Hook>();
   private readonly listeners = new Set<Listener>();
-  private readonly permissionWaiters = new Map<
-    string,
-    (response: RequestPermissionResponse) => void
-  >();
+  private readonly waitClosers = new Set<() => void>();
+  private readonly permissionWaiters = new Map<string, PermissionWaiter>();
+  private readonly permissionHandlers = new Set<PermissionHandler>();
+  private readonly permissionTimeoutMs: number;
   private launchInflight = 0;
+  private spawnAdmission: Promise<void> = Promise.resolve();
   private readonly interrupting = new Set<string>();
+  private readonly ingests = new Map<string, { fingerprint: string; result: Promise<IngestResult> }>();
   private busy = false;
   private flushScheduled = false;
   private flushAgain = false;
@@ -102,6 +145,10 @@ export class Engine {
     this.brain =
       options.brain ??
       new ScriptedRouter(options.config.defaultWorkerRuntime);
+    this.permissionTimeoutMs = options.permissionTimeoutMs ?? 10 * 60_000;
+    if (!Number.isFinite(this.permissionTimeoutMs) || this.permissionTimeoutMs <= 0) {
+      throw new TigerError("invalid_args", "permissionTimeoutMs must be a positive finite number");
+    }
     this.secrets.noteProcessEnv(process.env);
     for (const runtime of options.config.runtimes) this.secrets.noteEnv(runtime.env);
     this.mcpLaunch = options.mcpLaunch;
@@ -113,6 +160,7 @@ export class Engine {
 
   tools: ToolApi = {
     spawn: (input) => this.spawn(input),
+    resume: (id, input) => this.resume(id, input),
     list: () => this.list(),
     send: (id, input) => this.send(id, input),
     read: (id, since) => this.read(id, since),
@@ -135,6 +183,43 @@ export class Engine {
   addHook(hook: Hook): () => void {
     this.hooks.add(hook);
     return () => this.hooks.delete(hook);
+  }
+
+  /** Trusted host UI only: a model must never approve its own Worker. */
+  addPermissionHandler(handler: PermissionHandler): () => void {
+    this.permissionHandlers.add(handler);
+    return () => this.permissionHandlers.delete(handler);
+  }
+
+  pendingPermissions(workerId?: string): PendingPermission[] {
+    return [...this.permissionWaiters.values()]
+      .filter((waiter) => workerId === undefined || waiter.request.workerId === workerId)
+      .map((waiter) => JSON.parse(JSON.stringify(waiter.request)) as PendingPermission);
+  }
+
+  respondPermission(input: PermissionResponseInput): { status: "resolved"; permissionId: string; workerId: string } {
+    requireString(input.workerId, "workerId");
+    requireString(input.permissionId, "permissionId");
+    const waiter = this.permissionWaiters.get(input.permissionId);
+    if (!waiter) throw new TigerError("permission_not_pending", "Permission request is unknown, expired, or already answered");
+    if (waiter.request.workerId !== input.workerId) throw new TigerError("permission_worker_mismatch", "Permission request belongs to a different Worker");
+    if (this.closed || this.clock.now() >= waiter.request.expiresAt) {
+      this.completePermission(input.permissionId, { outcome: { outcome: "cancelled" } });
+      throw new TigerError("permission_expired", "Permission request is no longer active");
+    }
+    const decision = input.decision;
+    if (decision?.outcome === "cancelled") {
+      this.completePermission(input.permissionId, { outcome: { outcome: "cancelled" } });
+    } else if (decision?.outcome === "selected") {
+      const option = waiter.nativeOptions.get(decision.optionId);
+      if (!option || option.kind !== decision.optionKind) {
+        throw new TigerError("invalid_permission_option", "Choose an exact option and kind from this permission request");
+      }
+      this.completePermission(input.permissionId, { outcome: { outcome: "selected", optionId: option.optionId } });
+    } else {
+      throw new TigerError("invalid_permission_decision", "Permission decision must explicitly select an option or cancel");
+    }
+    return { status: "resolved", permissionId: input.permissionId, workerId: input.workerId };
   }
 
   async start(): Promise<void> {
@@ -194,6 +279,60 @@ export class Engine {
   }
 
   async ingest(input: TriggerInput): Promise<IngestResult> {
+    // Inputs without a provider identity remain independent submissions.
+    if (input.id === undefined) return this.ingestNew(input, newId("trg"));
+    requireString(input.id, "id");
+    const snapshot = { ...input };
+    const key = JSON.stringify([snapshot.source, snapshot.id]);
+    const fingerprint = ingressFingerprint(snapshot);
+    const pending = this.ingests.get(key);
+    if (pending) {
+      if (pending.fingerprint !== fingerprint) {
+        throw new TigerError("ingest_identity_conflict", "External event identity was reused with different content");
+      }
+      const result = await pending.result;
+      return { ...result, deliveredTo: [...result.deliveredTo] };
+    }
+    const result = this.ingestIdentified(snapshot, fingerprint);
+    this.ingests.set(key, { fingerprint, result });
+    try {
+      const receipt = await result;
+      return { ...receipt, deliveredTo: [...receipt.deliveredTo] };
+    } finally {
+      this.ingests.delete(key);
+    }
+  }
+
+  private async ingestIdentified(input: TriggerInput, fingerprint: string): Promise<IngestResult> {
+    const externalId = input.id!;
+    const claim = await this.store.claimIngress({
+      source: input.source,
+      externalId,
+      fingerprint,
+      triggerId: newId("trg"),
+      createdAt: this.clock.now(),
+    });
+    if (!claim.claimed) {
+      let originalFingerprint = claim.receipt.fingerprint;
+      if (originalFingerprint === null) {
+        const trigger = await this.store.getTrigger(claim.receipt.triggerId);
+        const thread = trigger ? await this.store.getThread(trigger.threadId) : undefined;
+        if (trigger && thread) originalFingerprint = ingressFingerprint({ ...trigger, thread: thread.key });
+      }
+      if (originalFingerprint !== null && originalFingerprint !== fingerprint) {
+        throw new TigerError("ingest_identity_conflict", "External event identity was reused with different content");
+      }
+      if (claim.receipt.result) return claim.receipt.result;
+      // Another process may still own this dispatch, or it may have crashed
+      // after a side effect. Neither case authorizes a blind replay.
+      throw new TigerError("ingest_incomplete", `Dispatch ${claim.receipt.triggerId} has no completed receipt; reconcile it before retrying`);
+    }
+    const result = await this.ingestNew(input, claim.receipt.triggerId);
+    await this.store.completeIngress(input.source, externalId, fingerprint, result);
+    return result;
+  }
+
+  private async ingestNew(input: TriggerInput, triggerId: string): Promise<IngestResult> {
     const thread = await this.store.upsertThread(input.thread, input.source, input.timestamp || this.clock.now());
     const subs = await this.activeSubscriptions(thread.id);
     const admission = admit(
@@ -208,7 +347,7 @@ export class Engine {
       this.config.filter,
     );
     const trigger: TriggerRecord = {
-      id: newId("trg"),
+      id: triggerId,
       externalId: input.id ?? null,
       source: input.source,
       threadId: thread.id,
@@ -299,6 +438,20 @@ export class Engine {
   }
 
   async spawn(input: SpawnRequest): Promise<SpawnResult> {
+    if (this.closed) throw new TigerError("engine_closed", "Cannot start a Worker after Engine shutdown");
+    const previous = this.spawnAdmission;
+    let release!: () => void;
+    this.spawnAdmission = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      if (this.closed) throw new TigerError("engine_closed", "Cannot start a Worker after Engine shutdown");
+      return await this.spawnAdmitted(input);
+    } finally {
+      release();
+    }
+  }
+
+  private async spawnAdmitted(input: SpawnRequest): Promise<SpawnResult> {
     const runtimeName = requireString(input.runtime, "runtime");
     const task = requireString(input.task ?? input.prompt, "task");
     const cwdArg = optionalString(input.cwd ?? input.repo, "cwd");
@@ -310,6 +463,7 @@ export class Engine {
     const running = (await this.store.listSessions("worker")).filter(
       (session) => session.state === "starting" || session.state === "running",
     );
+    if (this.closed) throw new TigerError("engine_closed", "Cannot start a Worker after Engine shutdown");
     if (running.length >= this.config.maxConcurrency) {
       throw new TigerError("max_concurrency", `max concurrency ${this.config.maxConcurrency} reached`);
     }
@@ -319,6 +473,7 @@ export class Engine {
     const workerId = newId("wrk");
     const base = path.resolve(cwdArg ?? this.workspaceRoot);
     const workspace = await prepareWorkspace(base, workerId);
+    if (this.closed) throw new TigerError("engine_closed", "Cannot start a Worker after Engine shutdown");
     const now = this.clock.now();
     const session: SessionRecord = {
       id: workerId,
@@ -356,6 +511,42 @@ export class Engine {
       void this.failWorker(session.id, error).catch(() => undefined);
     });
     return { status: "started", workerId, threadId: thread.id };
+  }
+
+  /** Explicitly restore an interrupted Worker on its existing worktree.
+   * The caller must provide new input; the old prompt is never replayed. */
+  async resume(workerId: string, input: string): Promise<SpawnResult> {
+    requireString(workerId, "workerId");
+    requireString(input, "input");
+    const previous = this.spawnAdmission;
+    let release!: () => void;
+    this.spawnAdmission = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      if (this.closed) throw new TigerError("engine_closed", "Cannot resume a Worker after Engine shutdown");
+      const session = await this.requireWorker(workerId);
+      if (session.state !== "interrupted") throw new TigerError("not_resumable", `worker ${workerId} is ${session.state}`);
+      const live = this.live.get(workerId);
+      if (live?.handle) throw new TigerError("worker_running", `worker ${workerId} still has a live runtime handle`);
+      if (!session.cwd || !session.baseCwd) throw new TigerError("workspace_missing", `worker ${workerId} has no recoverable workspace`);
+      await access(session.cwd);
+      const running = (await this.store.listSessions("worker")).filter((item) => item.state === "starting" || item.state === "running");
+      if (running.length >= this.config.maxConcurrency) throw new TigerError("max_concurrency", `max concurrency ${this.config.maxConcurrency} reached`);
+      if (this.closed) throw new TigerError("engine_closed", "Cannot resume a Worker after Engine shutdown");
+      const runtime = this.runtimeByName(session.runtime ?? this.config.defaultWorkerRuntime);
+      const reset: LiveWorker = { busy: false, pumping: false, pumpAgain: false, terminalEmitted: false, suppressExit: false, workspace: { cwd: session.cwd, baseCwd: session.baseCwd, worktree: session.worktree } };
+      this.live.set(workerId, reset);
+      await this.transition(workerId, "starting");
+      if (session.threadId) await this.store.addSubscription(workerId, session.threadId, this.clock.now());
+      await this.emit("worker.update", workerId, { state: "starting", recovered: true, nativeSession: "new" });
+      const resumed = { ...session, state: "starting" as const, pid: null, acpSessionId: null, updatedAt: this.clock.now() };
+      void this.bootWorker(resumed, runtime, input).catch((error) => {
+        if (!this.closed) void this.failWorker(workerId, error).catch(() => undefined);
+      });
+      return { status: "started", workerId, threadId: session.threadId ?? "" };
+    } finally {
+      release();
+    }
   }
 
   async list(): Promise<Array<{ id: string; state: string; runtime: string | null; threadId: string | null }>> {
@@ -463,11 +654,17 @@ export class Engine {
       throw new TigerError("not_running", `worker ${id} is ${session.state}`);
     }
     this.interrupting.add(id);
+    this.cancelPermissions(id);
     const live = this.liveOf(id);
-    await live.handle?.cancel().catch(() => undefined);
+    // A starting Worker may not have a native handle yet. runPrompt observes
+    // the pending cancellation before submitting its first input.
+    if (!live.handle) return { status: "cancelled" };
+    // Arm before awaiting the native acknowledgement: that await can outlive
+    // this turn, and a late timer must never cancel the following turn.
     live.grace = this.clock.setTimeout(() => {
       void this.forceCancel(id);
     }, this.config.cancelGraceMs);
+    await live.handle.cancel().catch(() => undefined);
     return { status: "cancelled" };
   }
 
@@ -478,25 +675,46 @@ export class Engine {
     if (!Array.isArray(ids) || ids.length === 0) {
       throw new TigerError("invalid_args", "ids must be a non-empty list");
     }
+    if (this.closed) return { status: "closed", done: [] };
     const done = () => this.workersSatisfied(ids);
     const immediate = await done();
+    if (this.closed) return { status: "closed", done: [] };
     if (mode === "any" && immediate.length > 0) return { status: "ok", done: immediate };
     if (mode === "all" && immediate.length === ids.length) return { status: "ok", done: immediate };
-    return new Promise((resolve) => {
-      const timer = this.clock.setTimeout(() => {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        settled = true;
+        this.clock.clearTimeout(timer);
         this.listeners.delete(listener);
-        void done().then((ready) => resolve({ status: "timeout", done: ready }));
-      }, timeout);
-      const listener = (): void => {
+        this.waitClosers.delete(onClose);
+      };
+      const finish = (status: string, ready: string[]) => {
+        if (settled) return;
+        cleanup();
+        resolve({ status, done: ready });
+      };
+      const onClose = () => finish("closed", []);
+      const inspect = (status: "ok" | "timeout") => {
+        if (settled) return;
+        if (this.closed) return onClose();
         void done().then((ready) => {
-          const finished = mode === "any" ? ready.length > 0 : ready.length === ids.length;
-          if (!finished) return;
-          this.clock.clearTimeout(timer);
-          this.listeners.delete(listener);
-          resolve({ status: "ok", done: ready });
+          if (this.closed) return onClose();
+          if (status === "timeout" || (mode === "any" ? ready.length > 0 : ready.length === ids.length)) finish(status, ready);
+        }, (error: unknown) => {
+          if (settled) return;
+          if (this.closed) return onClose();
+          cleanup();
+          reject(error);
         });
       };
+      const listener = () => inspect("ok");
+      const timer = this.clock.setTimeout(() => inspect("timeout"), timeout);
+      this.waitClosers.add(onClose);
       this.listeners.add(listener);
+      // Cover a Worker settling between the initial snapshot and listener
+      // registration, without waiting for another unrelated event.
+      listener();
     });
   }
 
@@ -504,7 +722,14 @@ export class Engine {
     const session = await this.requireWorker(id);
     if (session.state === "killed") return { status: "killed", idempotent: true };
     const live = this.live.get(id);
-    if (live) live.suppressExit = true;
+    if (live) {
+      // Mark the session terminal before awaiting process shutdown. A prompt
+      // can resolve concurrently with kill(); without this guard its late
+      // turn_end transition could move the session back to idle.
+      live.suppressExit = true;
+      live.terminalEmitted = true;
+    }
+    this.cancelPermissions(id);
     await live?.handle?.kill();
     if (live?.stall) this.clock.clearTimeout(live.stall);
     if (live?.grace) this.clock.clearTimeout(live.grace);
@@ -552,10 +777,13 @@ export class Engine {
   }
 
   resolvePermission(workerId: string, optionId: string): void {
-    const waiter = this.permissionWaiters.get(workerId);
-    if (!waiter) return;
-    this.permissionWaiters.delete(workerId);
-    waiter({ outcome: { outcome: "selected", optionId } });
+    const pending = [...this.permissionWaiters.values()].filter((waiter) => waiter.request.workerId === workerId);
+    if (pending.length === 0) return;
+    if (pending.length !== 1) throw new TigerError("ambiguous_permission_request", "Answer by permissionId when a Worker has multiple pending requests");
+    const waiter = pending[0];
+    const option = [...waiter.nativeOptions.entries()].find(([publicId, native]) => publicId === optionId || native.optionId === optionId);
+    if (!option) throw new TigerError("invalid_permission_option", "Choose an option from the pending permission request");
+    this.respondPermission({ workerId, permissionId: waiter.request.permissionId, decision: { outcome: "selected", optionId: option[0], optionKind: option[1].kind } });
   }
 
   noteSecret(name: string, value: string): void {
@@ -601,6 +829,8 @@ export class Engine {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.cancelPermissions();
+    for (const close of this.waitClosers) close();
     for (const [, live] of this.live) {
       if (live.stall) this.clock.clearTimeout(live.stall);
       if (live.grace) this.clock.clearTimeout(live.grace);
@@ -615,13 +845,27 @@ export class Engine {
     try {
       const handle = await this.factory.launch(runtime, this.launchContext(session, runtime));
       live.handle = handle;
+      // Shutdown may already have closed the Store while launch was waiting
+      // on a handshake. Reap the process before attempting any storage IO.
+      if (this.closed || live.suppressExit) {
+        await handle.kill();
+        live.handle = undefined;
+        return;
+      }
+      const current = await this.store.getSession(session.id);
+      if (this.closed || live.suppressExit || !current || isTerminal(current.state)) {
+        await handle.kill();
+        live.handle = undefined;
+        return;
+      }
       await this.store.updateSession(session.id, {
         pid: handle.pid ?? null,
         acpSessionId: handle.acpSessionId ?? null,
         updatedAt: this.clock.now(),
       });
-      if (this.closed) {
+      if (this.closed || live.suppressExit) {
         await handle.kill();
+        live.handle = undefined;
         return;
       }
       await this.transition(session.id, "running");
@@ -641,6 +885,8 @@ export class Engine {
       role: "worker",
       mcpServers: this.ipc?.mcpCommand("worker"),
       onUpdate: (update) => {
+        const live = this.live.get(session.id);
+        if (this.closed || !live || live.suppressExit || live.terminalEmitted) return;
         this.armStall(session.id);
         const payload: Record<string, unknown> = {
           sessionUpdate: update.sessionUpdate,
@@ -664,15 +910,19 @@ export class Engine {
   private async runPrompt(workerId: string, text: string): Promise<void> {
     const live = this.liveOf(workerId);
     const handle = live.handle;
-    if (!handle) return;
+    if (!handle || this.closed || live.suppressExit) return;
     live.busy = true;
     try {
-      const result = await handle.prompt(text);
-      if (this.closed) return;
+      const result = this.interrupting.has(workerId)
+        ? { stopReason: "cancelled", text: "" }
+        : await handle.prompt(text);
+      if (this.closed || live.suppressExit) return;
       const session = await this.store.getSession(workerId);
       if (!session || isTerminal(session.state)) return;
-      await this.finishTurn(workerId, result.stopReason, result.text);
+      const cancelled = this.interrupting.has(workerId);
+      await this.finishTurn(workerId, cancelled ? "cancelled" : result.stopReason, cancelled ? "" : result.text);
     } catch (error) {
+      if (this.closed || live.suppressExit) return;
       const session = await this.store.getSession(workerId);
       if (!session || isTerminal(session.state)) return;
       await this.failWorker(workerId, error);
@@ -690,17 +940,36 @@ export class Engine {
   private async pumpInbox(workerId: string): Promise<void> {
     if (this.closed) return;
     const live = this.liveOf(workerId);
+    if (live.pumping) {
+      live.pumpAgain = true;
+      return;
+    }
     if (live.busy) return;
-    const session = await this.store.getSession(workerId);
-    if (!session || isTerminal(session.state)) return;
-    if (!live.handle) return;
-    if (session.state !== "idle" && session.state !== "awaiting_input") return;
-    const next = await this.store.claimInbox(workerId);
-    if (!next) return;
-    await this.transition(workerId, "running");
-    this.armStall(workerId);
-    await this.runPrompt(workerId, next.text);
-    await this.store.completeInbox(next.id);
+    // Reserve before the first storage await. Concurrent ingress can enqueue
+    // more messages, but only this pump may submit prompts to the ACP session.
+    live.pumping = true;
+    try {
+      while (!this.closed && !live.suppressExit) {
+        live.pumpAgain = false;
+        const session = await this.store.getSession(workerId);
+        if (!session || isTerminal(session.state) || !live.handle) return;
+        if (session.state !== "idle" && session.state !== "awaiting_input") return;
+        const next = await this.store.claimInbox(workerId);
+        if (!next) return;
+        await this.transition(workerId, "running");
+        this.armStall(workerId);
+        await this.runPrompt(workerId, next.text);
+        await this.store.completeInbox(next.id);
+      }
+    } finally {
+      live.pumping = false;
+      // An enqueue can race the empty inbox read. Its wakeup must survive
+      // releasing this reservation, even if no turn ran in this pump.
+      if (live.pumpAgain && !this.closed && !live.suppressExit) {
+        live.pumpAgain = false;
+        void this.pumpInbox(workerId);
+      }
+    }
   }
 
   private async deliverToWorker(workerId: string, trigger: TriggerRecord, threadKey: string): Promise<void> {
@@ -730,7 +999,8 @@ export class Engine {
   private async finishTurn(workerId: string, stopReason: string, text: string): Promise<void> {
     if (this.closed) return;
     const live = this.liveOf(workerId);
-    if (live.terminalEmitted) return;
+    if (live.suppressExit || live.terminalEmitted) return;
+    this.cancelPermissions(workerId);
     if (live.stall) this.clock.clearTimeout(live.stall);
     const awaitingInput = deriveAwaitingInput(stopReason, text);
     const next: SessionState = awaitingInput ? "awaiting_input" : "idle";
@@ -745,6 +1015,7 @@ export class Engine {
       stopReason,
       awaitingInput,
       summary,
+      text,
     });
     const session = await this.store.getSession(workerId);
     await this.store.enqueueRouter(
@@ -768,6 +1039,7 @@ export class Engine {
     const live = this.liveOf(workerId);
     if (live.terminalEmitted) return;
     live.terminalEmitted = true;
+    this.cancelPermissions(workerId);
     if (live.stall) this.clock.clearTimeout(live.stall);
     const session = await this.store.getSession(workerId);
     if (session && !isTerminal(session.state)) {
@@ -811,7 +1083,9 @@ export class Engine {
   }
 
   private armStall(workerId: string): void {
+    if (this.closed) return;
     const live = this.liveOf(workerId);
+    if (live.suppressExit || live.terminalEmitted) return;
     if (live.stall) this.clock.clearTimeout(live.stall);
     live.stall = this.clock.setTimeout(() => {
       void this.onStalled(workerId);
@@ -825,6 +1099,7 @@ export class Engine {
     const live = this.liveOf(workerId);
     if (live.terminalEmitted) return;
     live.terminalEmitted = true;
+    this.cancelPermissions(workerId);
     await this.transition(workerId, "stalled");
     await this.emit("worker.stalled", workerId, {
       idleTimeoutMs: this.config.idleTimeoutMs,
@@ -898,32 +1173,78 @@ export class Engine {
     request: RequestPermissionRequest,
   ): Promise<RequestPermissionResponse> {
     const toolCall = request.toolCall;
+    const options = request.options.map((option) => ({
+      optionId: option.optionId,
+      name: option.name,
+      kind: option.kind,
+    }));
     const decision = decidePermission(role, policy, {
       toolTitle: typeof toolCall.title === "string" ? toolCall.title : undefined,
       toolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
-      options: request.options.map((option) => ({
-        optionId: option.optionId,
-        name: option.name,
-        kind: option.kind,
-      })),
+      options,
     });
-    if (role === "worker") {
-      await this.emit("worker.permission_request", sessionId, {
-        title: toolCall.title,
-        kind: toolCall.kind,
-        policy,
-        decision: decision.type,
-      });
-    }
     if (decision.type === "selected") {
       return { outcome: { outcome: "selected", optionId: decision.optionId } };
     }
     if (decision.type === "cancelled") {
       return { outcome: { outcome: "cancelled" } };
     }
-    return new Promise((resolve) => {
-      this.permissionWaiters.set(sessionId, resolve);
-    });
+      const permissionId = newId("perm");
+      const createdAt = this.clock.now();
+      const pending: PendingPermission = {
+        permissionId,
+        workerId: sessionId,
+        role,
+        toolCallId: String(toolCall.toolCallId),
+        title: typeof toolCall.title === "string" ? this.secrets.redact(toolCall.title) : "",
+        kind: typeof toolCall.kind === "string" ? toolCall.kind : "",
+        input: toolCall.rawInput === undefined ? undefined : this.secrets.redactValue(toolCall.rawInput),
+        options: options.map((option) => ({ ...option, name: this.secrets.redact(option.name) })),
+        createdAt,
+        expiresAt: createdAt + this.permissionTimeoutMs,
+      };
+      const nativeOptions = new Map(options.map((option) => [option.optionId, option]));
+      const response = new Promise<RequestPermissionResponse>((resolve) => {
+        const timer = this.clock.setTimeout(() => {
+          this.completePermission(permissionId, { outcome: { outcome: "cancelled" } });
+        }, this.permissionTimeoutMs);
+        this.permissionWaiters.set(permissionId, { request: pending, nativeOptions, resolve, timer });
+      });
+      if (role === "worker") {
+        await this.emit("worker.permission_request", sessionId, {
+          permissionId,
+          title: toolCall.title,
+          kind: toolCall.kind,
+          policy,
+          decision: decision.type,
+          options: pending.options,
+        });
+      }
+      for (const handler of this.permissionHandlers) {
+        try {
+          const result = handler(JSON.parse(JSON.stringify(pending)) as PendingPermission);
+          if (result && typeof (result as Promise<void>).then === "function") void (result as Promise<void>).catch(() => undefined);
+        } catch {
+          // A host UI failure must not keep an ACP request blocked forever.
+        }
+      }
+      return response;
+  }
+
+  private completePermission(permissionId: string, response: RequestPermissionResponse): boolean {
+    const waiter = this.permissionWaiters.get(permissionId);
+    if (!waiter) return false;
+    this.permissionWaiters.delete(permissionId);
+    this.clock.clearTimeout(waiter.timer);
+    waiter.resolve(response);
+    return true;
+  }
+
+  private cancelPermissions(workerId?: string): void {
+    for (const [permissionId, waiter] of this.permissionWaiters) {
+      if (workerId !== undefined && waiter.request.workerId !== workerId) continue;
+      this.completePermission(permissionId, { outcome: { outcome: "cancelled" } });
+    }
   }
 
   private async ensureRouterSession(): Promise<void> {
@@ -1012,7 +1333,7 @@ export class Engine {
   private liveOf(id: string): LiveWorker {
     let live = this.live.get(id);
     if (!live) {
-      live = { busy: false, terminalEmitted: false, suppressExit: false };
+      live = { busy: false, pumping: false, pumpAgain: false, terminalEmitted: false, suppressExit: false };
       this.live.set(id, live);
     }
     return live;
@@ -1021,6 +1342,7 @@ export class Engine {
   private async workersSatisfied(ids: string[]): Promise<string[]> {
     const ready: string[] = [];
     for (const id of ids) {
+      if (this.closed) break;
       const session = await this.store.getSession(id);
       if (!session) continue;
       if (session.state !== "starting" && session.state !== "running") ready.push(id);

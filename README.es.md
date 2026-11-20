@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ f32cfb673524b693f5d707f1ac7ff5ea08ab9558 -->
+<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # TigerCat
@@ -23,6 +23,7 @@ npm run build
 npm link
 
 tigercat runtime list
+tigercat runtime discover
 tigercat runtime test claude-code
 tigercat runtime test codex
 ```
@@ -34,8 +35,9 @@ Si no hay un binario `claude` o `codex`, y `TIGERCAT_RUNTIME_LIVE` no está defi
 Con el binario instalado, así se ejecuta de verdad:
 
 ```bash
-TIGERCAT_CLAUDE_BIN="$(command -v claude)" tigercat runtime test claude-code
-TIGERCAT_CODEX_BIN="$(command -v codex)" tigercat runtime test codex
+tigercat runtime discover --json
+tigercat runtime test claude-code
+tigercat runtime test codex
 ```
 
 `TIGERCAT_CLAUDE_BIN` se reenvía como `CLAUDE_CODE_EXECUTABLE`. `TIGERCAT_CODEX_BIN` se reenvía como `CODEX_PATH`. Claude Code usa un inicio de sesión `claude` que ya exista, o `ANTHROPIC_API_KEY`. Codex usa `CODEX_API_KEY` u `OPENAI_API_KEY`. En una máquina sin interfaz gráfica, define `NO_BROWSER=1` para que Codex no abra el inicio de sesión de ChatGPT.

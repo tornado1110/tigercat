@@ -1,0 +1,10 @@
+{
+  "name": "tigercat",
+  "version": "0.1.0",
+  "description": "Dispatch coding tasks to Claude Code, Codex, and other ACP workers from the current Codex conversation.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "homepage": "https://github.com/tornado1110/tigercat",
+  "repository": "https://github.com/tornado1110/tigercat",
+  "license": "MIT"
+}

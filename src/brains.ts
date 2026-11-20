@@ -3,6 +3,7 @@ import type { RouterItem, SpawnRequest, SpawnResult } from "./types.js";
 
 export interface ToolApi {
   spawn(input: SpawnRequest): Promise<SpawnResult>;
+  resume?(id: string, input: string): Promise<SpawnResult>;
   list(): Promise<Array<{ id: string; state: string; runtime: string | null; threadId: string | null }>>;
   send(id: string, input: string): Promise<{ status: "started" }>;
   read(id: string, since?: number): Promise<unknown>;

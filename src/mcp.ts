@@ -14,6 +14,15 @@ export async function serveMcp(options: {
   token: string;
   role: "router" | "worker";
 }): Promise<void> {
+  await createMcpServer(options).connect(new StdioServerTransport());
+}
+
+/** Shared registrations for the ACP bridge and the host-driven plugin. */
+export function createMcpServer(options: {
+  port: number;
+  token: string;
+  role: "router" | "worker";
+}): McpServer {
   const names = toolNamesForRole(options.role);
   const server = new McpServer({ name: "tigercat", version: "0.1.0" });
   for (const name of names) {
@@ -40,7 +49,7 @@ export async function serveMcp(options: {
       },
     );
   }
-  await server.connect(new StdioServerTransport());
+  return server;
 }
 
 const schemas: Record<string, ReturnType<typeof z.object> | undefined> = {
@@ -53,6 +62,7 @@ const schemas: Record<string, ReturnType<typeof z.object> | undefined> = {
     thread: z.string().optional(),
     threads: z.array(z.string()).optional(),
   }),
+  resume: z.object({ id: z.string(), input: z.string() }),
   list: z.object({}),
   send: z.object({ id: z.string(), input: z.string() }),
   read: z.object({ id: z.string(), since: z.number().optional() }),
@@ -71,16 +81,18 @@ function describe(name: string): string {
   switch (name) {
     case "spawn":
       return "Start a Worker immediately. Returns status=started. Does not wait for the task.";
+    case "resume":
+      return "Explicitly resume an interrupted Worker on its existing worktree with new input. Never replays the old prompt.";
     case "list":
       return "List Workers.";
     case "send":
       return "Queue input to a Worker. Returns started.";
     case "read":
-      return "Read a summary of a Worker, Trigger, or Thread by id. since skips already-seen event seqs. Never returns a full transcript.";
+      return "Read a Worker, Trigger, or Thread summary, or an event by id. Read a worker.turn_end event ID for its full final text. since skips already-seen event seqs.";
     case "interrupt":
       return "Cancel the Worker's current turn (ACP session/cancel). Keeps Thread subscriptions and the worktree.";
     case "wait":
-      return "Optional convenience. Block until workers settle. Not the main path; results also arrive as events.";
+      return "Wait until Workers settle or the timeout expires, then use read to inspect their results.";
     case "kill":
       return "Release every Thread subscription, end the session, and keep the worktree for attach.";
     case "subscribe":

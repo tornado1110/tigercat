@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 965b9d6112f5db7d52033b70a309cd8a83044cf5 -->
+<!-- i18n-source: docs/operations.md @ 3452da8c151a5f5df97290f28906e96d7143b976 -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # Operar TigerCat

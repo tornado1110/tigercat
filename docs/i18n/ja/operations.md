@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 965b9d6112f5db7d52033b70a309cd8a83044cf5 -->
+<!-- i18n-source: docs/operations.md @ 3452da8c151a5f5df97290f28906e96d7143b976 -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat の操作

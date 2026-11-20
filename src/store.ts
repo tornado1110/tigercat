@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { TigerError } from "./errors.js";
 import { newId } from "./ids.js";
 import type {
   EventType,
@@ -13,6 +14,50 @@ import type {
   TriggerRecord,
   FilterAction,
 } from "./types.js";
+
+export interface TriggerIngestResult {
+  action: FilterAction;
+  triggerId: string;
+  threadId: string;
+  deliveredTo: string[];
+  router: boolean;
+  interrupt: boolean;
+  rule: string | null;
+}
+
+export interface IngressReceipt {
+  /** Legacy triggers have no digest or reconstructable completed receipt. */
+  fingerprint: string | null;
+  triggerId: string;
+  result: TriggerIngestResult | null;
+}
+
+export type DeliveryStatus = "pending" | "retrying" | "inflight" | "delivered" | "failed" | "uncertain";
+
+/** A durable send intent. `target` is trusted process state captured at submit time. */
+export interface DeliveryRecord {
+  eventId: string;
+  destinationId: string;
+  workerId: string;
+  text: string;
+  target: Record<string, string>;
+  status: DeliveryStatus;
+  attempts: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A route watch persisted before the Worker result exists. */
+export interface DeliveryBindingRecord {
+  bindingId: string;
+  workerId: string;
+  destinationId: string;
+  target: Record<string, string>;
+  baselineSeq: number;
+  createdAt: number;
+}
 
 /**
  * All durable TigerCat state lives behind this interface.
@@ -43,6 +88,56 @@ export interface Store {
   getTrigger(id: string): Promise<TriggerRecord | undefined>;
   setTriggerAction(id: string, action: FilterAction, rule: string | null, interrupt: boolean): Promise<void>;
   listTriggers(threadId: string): Promise<TriggerRecord[]>;
+
+  claimIngress(input: {
+    source: string;
+    externalId: string;
+    fingerprint: string;
+    triggerId: string;
+    createdAt: number;
+  }): Promise<{ claimed: boolean; receipt: IngressReceipt }>;
+  completeIngress(source: string, externalId: string, fingerprint: string, result: TriggerIngestResult): Promise<void>;
+
+  putDelivery(input: {
+    eventId: string;
+    destinationId: string;
+    workerId: string;
+    text: string;
+    target: Record<string, string>;
+    createdAt: number;
+  }): Promise<DeliveryRecord>;
+  getDelivery(eventId: string, destinationId: string): Promise<DeliveryRecord | undefined>;
+  listDeliveries(query?: { statuses?: DeliveryStatus[]; dueAt?: number }): Promise<DeliveryRecord[]>;
+  claimDelivery(eventId: string, destinationId: string, now: number): Promise<DeliveryRecord | undefined>;
+  updateDelivery(input: {
+    eventId: string;
+    destinationId: string;
+    status: DeliveryStatus;
+    attempts?: number;
+    nextAttemptAt?: number | null;
+    lastError?: string | null;
+    updatedAt: number;
+  }): Promise<void>;
+  recoverInflightDeliveries(now: number): Promise<number>;
+  putDeliveryBinding(input: {
+    bindingId?: string;
+    workerId: string;
+    destinationId: string;
+    target: Record<string, string>;
+    baselineSeq: number;
+    createdAt: number;
+  }): Promise<DeliveryBindingRecord>;
+  listDeliveryBindings(workerId?: string): Promise<DeliveryBindingRecord[]>;
+  /** Atomically claim the oldest binding eligible for this Worker event. */
+  claimDeliveryBinding(workerId: string, eventSeq: number): Promise<DeliveryBindingRecord | undefined>;
+  /** Atomically consume a binding and create its outbox row. */
+  claimDeliveryBindingAndPut(input: {
+    workerId: string;
+    eventSeq: number;
+    eventId: string;
+    text: string;
+    createdAt: number;
+  }): Promise<{ binding: DeliveryBindingRecord; delivery: DeliveryRecord } | undefined>;
 
   addSubscription(workerId: string, threadId: string, createdAt: number): Promise<void>;
   removeSubscription(workerId: string, threadId: string): Promise<void>;
@@ -96,6 +191,30 @@ interface EventRow {
   type: EventType;
   payload: string;
   created_at: number;
+}
+
+function migrateDeliveryBindings(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(delivery_bindings)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "binding_id")) return;
+  db.exec(`
+    BEGIN IMMEDIATE;
+    DROP INDEX IF EXISTS delivery_bindings_claim;
+    ALTER TABLE delivery_bindings RENAME TO delivery_bindings_legacy;
+    CREATE TABLE delivery_bindings (
+      binding_id TEXT PRIMARY KEY,
+      worker_id TEXT NOT NULL,
+      destination_id TEXT NOT NULL,
+      target TEXT NOT NULL,
+      baseline_seq INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    INSERT INTO delivery_bindings (binding_id, worker_id, destination_id, target, baseline_seq, created_at)
+      SELECT 'bind_' || lower(hex(randomblob(16))), worker_id, destination_id, target, baseline_seq, created_at
+      FROM delivery_bindings_legacy;
+    DROP TABLE delivery_bindings_legacy;
+    CREATE INDEX delivery_bindings_claim ON delivery_bindings(worker_id, baseline_seq, created_at);
+    COMMIT;
+  `);
 }
 
 export class SqliteStore implements Store {
@@ -184,7 +303,53 @@ export class SqliteStore implements Store {
         status TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS ingress_receipts (
+        source TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        fingerprint TEXT,
+        trigger_id TEXT NOT NULL,
+        result TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (source, external_id)
+      );
+      CREATE TABLE IF NOT EXISTS deliveries (
+        event_id TEXT NOT NULL,
+        destination_id TEXT NOT NULL,
+        worker_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        target TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER,
+        last_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (event_id, destination_id)
+      );
+      CREATE INDEX IF NOT EXISTS deliveries_due ON deliveries(status, next_attempt_at, created_at);
+      CREATE TABLE IF NOT EXISTS delivery_bindings (
+        binding_id TEXT PRIMARY KEY,
+        worker_id TEXT NOT NULL,
+        destination_id TEXT NOT NULL,
+        target TEXT NOT NULL,
+        baseline_seq INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS delivery_bindings_claim ON delivery_bindings(worker_id, baseline_seq, created_at);
     `);
+    migrateDeliveryBindings(db);
+    if (!db.prepare("SELECT 1 FROM meta WHERE key = 'ingress_receipts_migrated'").get()) {
+      // Existing triggers may already have caused effects. Preserve their
+      // identity without guessing that they are safe to dispatch again.
+      db.exec(`
+        BEGIN IMMEDIATE;
+        INSERT OR IGNORE INTO ingress_receipts (source, external_id, fingerprint, trigger_id, result, created_at)
+          SELECT source, external_id, NULL, id, NULL, created_at
+          FROM triggers WHERE external_id IS NOT NULL ORDER BY created_at ASC, id ASC;
+        INSERT OR IGNORE INTO meta (key, value) VALUES ('ingress_receipts_migrated', '1');
+        COMMIT;
+      `);
+    }
     return new SqliteStore(db);
   }
 
@@ -306,13 +471,11 @@ export class SqliteStore implements Store {
   }
 
   async upsertThread(key: string, source: string, createdAt: number): Promise<ThreadRecord> {
-    const existing = await this.getThreadByKey(key);
-    if (existing) return existing;
     const thread: ThreadRecord = { id: newId("thr"), key, source, createdAt };
     this.db
-      .prepare("INSERT INTO threads (id, key, source, created_at) VALUES (?, ?, ?, ?)")
+      .prepare("INSERT INTO threads (id, key, source, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO NOTHING")
       .run(thread.id, thread.key, thread.source, thread.createdAt);
-    return thread;
+    return (await this.getThreadByKey(key))!;
   }
 
   async getThread(id: string): Promise<ThreadRecord | undefined> {
@@ -370,6 +533,231 @@ export class SqliteStore implements Store {
       .prepare("SELECT * FROM triggers WHERE thread_id = ? ORDER BY timestamp ASC, created_at ASC")
       .all(threadId) as unknown as TriggerRow[];
     return rows.map(mapTrigger);
+  }
+
+  async claimIngress(input: {
+    source: string;
+    externalId: string;
+    fingerprint: string;
+    triggerId: string;
+    createdAt: number;
+  }): Promise<{ claimed: boolean; receipt: IngressReceipt }> {
+    const inserted = this.db.prepare(`
+      INSERT INTO ingress_receipts (source, external_id, fingerprint, trigger_id, result, created_at)
+      VALUES (?, ?, ?, ?, NULL, ?) ON CONFLICT(source, external_id) DO NOTHING
+    `).run(input.source, input.externalId, input.fingerprint, input.triggerId, input.createdAt);
+    const row = this.db.prepare("SELECT fingerprint, trigger_id, result FROM ingress_receipts WHERE source = ? AND external_id = ?")
+      .get(input.source, input.externalId) as { fingerprint: string | null; trigger_id: string; result: string | null };
+    return {
+      claimed: inserted.changes === 1,
+      receipt: {
+        fingerprint: row.fingerprint,
+        triggerId: row.trigger_id,
+        result: row.result === null ? null : JSON.parse(row.result) as TriggerIngestResult,
+      },
+    };
+  }
+
+  async completeIngress(source: string, externalId: string, fingerprint: string, result: TriggerIngestResult): Promise<void> {
+    const updated = this.db.prepare(`
+      UPDATE ingress_receipts SET result = ?
+      WHERE source = ? AND external_id = ? AND fingerprint = ? AND trigger_id = ? AND result IS NULL
+    `).run(JSON.stringify(result), source, externalId, fingerprint, result.triggerId);
+    if (updated.changes !== 1) {
+      throw new TigerError("ingest_receipt_conflict", "Ingress receipt cannot be completed by this dispatch");
+    }
+  }
+
+  async putDelivery(input: {
+    eventId: string;
+    destinationId: string;
+    workerId: string;
+    text: string;
+    target: Record<string, string>;
+    createdAt: number;
+  }): Promise<DeliveryRecord> {
+    this.db.prepare(`
+      INSERT INTO deliveries (event_id, destination_id, worker_id, text, target, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
+      ON CONFLICT(event_id, destination_id) DO NOTHING
+    `).run(
+      input.eventId,
+      input.destinationId,
+      input.workerId,
+      input.text,
+      JSON.stringify(input.target),
+      input.createdAt,
+      input.createdAt,
+      input.createdAt,
+    );
+    const row = await this.getDelivery(input.eventId, input.destinationId);
+    if (!row) throw new TigerError("delivery_missing", "Delivery intent was not persisted");
+    return row;
+  }
+
+  async getDelivery(eventId: string, destinationId: string): Promise<DeliveryRecord | undefined> {
+    const row = this.db.prepare("SELECT * FROM deliveries WHERE event_id = ? AND destination_id = ?")
+      .get(eventId, destinationId) as DeliveryRow | undefined;
+    return row ? mapDelivery(row) : undefined;
+  }
+
+  async listDeliveries(query: { statuses?: DeliveryStatus[]; dueAt?: number } = {}): Promise<DeliveryRecord[]> {
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (query.statuses && query.statuses.length > 0) {
+      clauses.push(`status IN (${query.statuses.map(() => "?").join(",")})`);
+      params.push(...query.statuses);
+    }
+    if (query.dueAt !== undefined) {
+      clauses.push("(next_attempt_at IS NULL OR next_attempt_at <= ?)");
+      params.push(query.dueAt);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(`SELECT * FROM deliveries ${where} ORDER BY created_at ASC, event_id ASC, destination_id ASC`)
+      .all(...params) as unknown as DeliveryRow[];
+    return rows.map(mapDelivery);
+  }
+
+  async claimDelivery(eventId: string, destinationId: string, now: number): Promise<DeliveryRecord | undefined> {
+    const changed = this.db.prepare(`
+      UPDATE deliveries SET status = 'inflight', attempts = attempts + 1, updated_at = ?
+      WHERE event_id = ? AND destination_id = ? AND status IN ('pending', 'retrying')
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+    `).run(now, eventId, destinationId, now);
+    if (changed.changes !== 1) return undefined;
+    return this.getDelivery(eventId, destinationId);
+  }
+
+  async updateDelivery(input: {
+    eventId: string;
+    destinationId: string;
+    status: DeliveryStatus;
+    attempts?: number;
+    nextAttemptAt?: number | null;
+    lastError?: string | null;
+    updatedAt: number;
+  }): Promise<void> {
+    const current = await this.getDelivery(input.eventId, input.destinationId);
+    if (!current) return;
+    this.db.prepare(`
+      UPDATE deliveries SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ?, updated_at = ?
+      WHERE event_id = ? AND destination_id = ?
+    `).run(
+      input.status,
+      input.attempts ?? current.attempts,
+      input.nextAttemptAt === undefined ? current.nextAttemptAt : input.nextAttemptAt,
+      input.lastError === undefined ? current.lastError : input.lastError,
+      input.updatedAt,
+      input.eventId,
+      input.destinationId,
+    );
+  }
+
+  async recoverInflightDeliveries(now: number): Promise<number> {
+    const changed = this.db.prepare(`
+      UPDATE deliveries SET status = 'uncertain', last_error = 'delivery interrupted before outcome was known', updated_at = ?
+      WHERE status = 'inflight'
+    `).run(now);
+    return Number(changed.changes);
+  }
+
+  async putDeliveryBinding(input: {
+    bindingId?: string;
+    workerId: string;
+    destinationId: string;
+    target: Record<string, string>;
+    baselineSeq: number;
+    createdAt: number;
+  }): Promise<DeliveryBindingRecord> {
+    const bindingId = input.bindingId ?? newId("bind");
+    this.db.prepare(`
+      INSERT INTO delivery_bindings (binding_id, worker_id, destination_id, target, baseline_seq, created_at)
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(binding_id) DO NOTHING
+    `).run(
+      bindingId,
+      input.workerId,
+      input.destinationId,
+      JSON.stringify(input.target),
+      input.baselineSeq,
+      input.createdAt,
+    );
+    const rows = await this.listDeliveryBindings(input.workerId);
+    const row = rows.find((entry) => entry.bindingId === bindingId);
+    if (!row) throw new TigerError("delivery_binding_missing", "Delivery binding was not persisted");
+    return row;
+  }
+
+  async listDeliveryBindings(workerId?: string): Promise<DeliveryBindingRecord[]> {
+    const rows = workerId
+      ? this.db.prepare("SELECT * FROM delivery_bindings WHERE worker_id = ? ORDER BY baseline_seq ASC, created_at ASC, rowid ASC").all(workerId)
+      : this.db.prepare("SELECT * FROM delivery_bindings ORDER BY worker_id ASC, baseline_seq ASC, created_at ASC, rowid ASC").all();
+    return (rows as unknown as DeliveryBindingRow[]).map(mapDeliveryBinding);
+  }
+
+  async claimDeliveryBinding(workerId: string, eventSeq: number): Promise<DeliveryBindingRecord | undefined> {
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      const row = this.db.prepare(`
+        SELECT * FROM delivery_bindings
+        WHERE worker_id = ? AND baseline_seq < ?
+        ORDER BY baseline_seq ASC, created_at ASC, rowid ASC LIMIT 1
+      `).get(workerId, eventSeq) as DeliveryBindingRow | undefined;
+      if (!row) {
+        this.db.exec("COMMIT;");
+        return undefined;
+      }
+      this.db.prepare("DELETE FROM delivery_bindings WHERE binding_id = ?")
+        .run(row.binding_id);
+      this.db.exec("COMMIT;");
+      return mapDeliveryBinding(row);
+    } catch (error) {
+      try { this.db.exec("ROLLBACK;"); } catch { /* preserve original failure */ }
+      throw error;
+    }
+  }
+
+  async claimDeliveryBindingAndPut(input: {
+    workerId: string;
+    eventSeq: number;
+    eventId: string;
+    text: string;
+    createdAt: number;
+  }): Promise<{ binding: DeliveryBindingRecord; delivery: DeliveryRecord } | undefined> {
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      const row = this.db.prepare(`
+        SELECT * FROM delivery_bindings
+        WHERE worker_id = ? AND baseline_seq < ?
+        ORDER BY baseline_seq ASC, created_at ASC, rowid ASC LIMIT 1
+      `).get(input.workerId, input.eventSeq) as DeliveryBindingRow | undefined;
+      if (!row) {
+        this.db.exec("COMMIT;");
+        return undefined;
+      }
+      this.db.prepare(`
+        INSERT INTO deliveries (event_id, destination_id, worker_id, text, target, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
+        ON CONFLICT(event_id, destination_id) DO NOTHING
+      `).run(
+        input.eventId,
+        row.destination_id,
+        input.workerId,
+        input.text,
+        row.target,
+        input.createdAt,
+        input.createdAt,
+        input.createdAt,
+      );
+      this.db.prepare("DELETE FROM delivery_bindings WHERE binding_id = ?")
+        .run(row.binding_id);
+      const deliveryRow = this.db.prepare("SELECT * FROM deliveries WHERE event_id = ? AND destination_id = ?")
+        .get(input.eventId, row.destination_id) as unknown as DeliveryRow;
+      this.db.exec("COMMIT");
+      return { binding: mapDeliveryBinding(row), delivery: mapDelivery(deliveryRow) };
+    } catch (error) {
+      try { this.db.exec("ROLLBACK;"); } catch { /* preserve original failure */ }
+      throw error;
+    }
   }
 
   async addSubscription(workerId: string, threadId: string, createdAt: number): Promise<void> {
@@ -473,7 +861,7 @@ export class SqliteStore implements Store {
   async claimInbox(workerId: string): Promise<{ id: string; text: string; triggerId: string } | undefined> {
     const row = this.db
       .prepare(
-        "SELECT id, text, trigger_id FROM worker_inbox WHERE worker_id = ? AND status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1",
+        "SELECT id, text, trigger_id FROM worker_inbox WHERE worker_id = ? AND status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1",
       )
       .get(workerId) as { id: string; text: string; trigger_id: string } | undefined;
     if (!row) return undefined;
@@ -539,6 +927,29 @@ interface TriggerRow {
   created_at: number;
 }
 
+interface DeliveryRow {
+  event_id: string;
+  destination_id: string;
+  worker_id: string;
+  text: string;
+  target: string;
+  status: DeliveryStatus;
+  attempts: number;
+  next_attempt_at: number | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface DeliveryBindingRow {
+  binding_id: string;
+  worker_id: string;
+  destination_id: string;
+  target: string;
+  baseline_seq: number;
+  created_at: number;
+}
+
 function mapTrigger(row: TriggerRow): TriggerRecord {
   return {
     id: row.id,
@@ -554,6 +965,51 @@ function mapTrigger(row: TriggerRow): TriggerRecord {
     action: row.action,
     rule: row.rule,
     interrupt: row.interrupt === 1,
+    createdAt: row.created_at,
+  };
+}
+
+function mapDelivery(row: DeliveryRow): DeliveryRecord {
+  const target: Record<string, string> = {};
+  try {
+    const parsed: unknown = JSON.parse(row.target);
+    if (parsed && typeof parsed === "object") {
+      for (const [key, value] of Object.entries(parsed)) if (typeof value === "string") target[key] = value;
+    }
+  } catch {
+    // Keep a malformed target private and unusable rather than failing startup.
+  }
+  return {
+    eventId: row.event_id,
+    destinationId: row.destination_id,
+    workerId: row.worker_id,
+    text: row.text,
+    target,
+    status: row.status,
+    attempts: row.attempts,
+    nextAttemptAt: row.next_attempt_at,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapDeliveryBinding(row: DeliveryBindingRow): DeliveryBindingRecord {
+  const target: Record<string, string> = {};
+  try {
+    const parsed: unknown = JSON.parse(row.target);
+    if (parsed && typeof parsed === "object") {
+      for (const [key, value] of Object.entries(parsed)) if (typeof value === "string") target[key] = value;
+    }
+  } catch {
+    // A malformed target remains unusable and is kept private from logs.
+  }
+  return {
+    bindingId: row.binding_id,
+    workerId: row.worker_id,
+    destinationId: row.destination_id,
+    target,
+    baselineSeq: row.baseline_seq,
     createdAt: row.created_at,
   };
 }

@@ -1,7 +1,7 @@
 {
   "name": "tigercat",
   "version": "0.1.0",
-  "description": "A Super-agent router for coding agents: one resident ACP router that dispatches work to Claude Code, Codex, or any ACP agent.",
+  "description": "Task and Worker orchestration for coding agents, available as a standalone ACP router or a Codex plugin.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -16,8 +16,8 @@
   },
   "homepage": "https://github.com/tornado1110/tigercat#readme",
   "bin": {
-    "tigercat": "./bin/tigercat.js",
-    "tgc": "./bin/tgc.js"
+    "tigercat": "bin/tigercat.js",
+    "tgc": "bin/tgc.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -36,6 +36,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:plugin": "npm run build && node scripts/build-plugin.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "lint": "eslint src test",
     "test": "npm run build && vitest run",
@@ -43,6 +44,8 @@
     "docs:i18n-check": "node scripts/i18n-check.mjs"
   },
   "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.108.0",
+    "@agentclientprotocol/codex-acp": "2.7.0",
     "@agentclientprotocol/sdk": "2.7.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "smol-toml": "1.9.1",

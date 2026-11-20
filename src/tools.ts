@@ -7,6 +7,7 @@ import { TigerError } from "./errors.js";
  */
 export const ROUTER_TOOL_NAMES = [
   "spawn",
+  "resume",
   "list",
   "send",
   "read",
