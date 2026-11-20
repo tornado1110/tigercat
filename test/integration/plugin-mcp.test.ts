@@ -113,8 +113,9 @@ describe("host-driven Codex plugin", () => {
     expect(view.state).toBe("idle");
     expect((await host.engine.events()).filter((event) => event.type === "worker.turn_end")).toHaveLength(2);
     expect((await host.engine.workers()).map((worker) => worker.runtime)).toEqual(["test-worker"]);
-    await client.callTool({ name: "kill", arguments: { id } });
-    expect(payload(await client.callTool({ name: "read", arguments: { id } })).state).toBe("killed");
+    const killed = payload(await client.callTool({ name: "kill", arguments: { id } }));
+    expect(killed.status).toBe("killed");
+    await expect.poll(async () => payload(await client.callTool({ name: "read", arguments: { id } })).state, { timeout: 5_000 }).toBe("killed");
   });
 
   it("refuses plugin-cache paths by requiring an explicit absolute project cwd", async () => {

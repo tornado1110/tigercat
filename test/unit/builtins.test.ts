@@ -76,8 +76,9 @@ describe("built-in ACP runtimes", () => {
   it("discovers local vendor binaries from PATH without an environment override", () => {
     const root = mkdtempSync(path.join(tmpdir(), "tigercat-runtime-discovery-"));
     try {
-      const claude = path.join(root, "claude");
-      const codex = path.join(root, "codex");
+      const suffix = process.platform === "win32" ? ".cmd" : "";
+      const claude = path.join(root, `claude${suffix}`);
+      const codex = path.join(root, `codex${suffix}`);
       writeFileSync(claude, "#!/bin/sh\n");
       writeFileSync(codex, "#!/bin/sh\n");
       chmodSync(claude, 0o755);
@@ -95,7 +96,7 @@ describe("built-in ACP runtimes", () => {
   it("does not mistake a non-executable PATH file for a vendor binary", () => {
     const root = mkdtempSync(path.join(tmpdir(), "tigercat-runtime-discovery-mode-"));
     try {
-      writeFileSync(path.join(root, "claude"), "#!/bin/sh\n");
+      writeFileSync(path.join(root, process.platform === "win32" ? "claude.txt" : "claude"), "#!/bin/sh\n");
       const listed = listRuntimes(defaultConfig(), { PATH: root });
       expect(listed.find((runtime) => runtime.name === "claude-code")).toMatchObject({
         vendorFound: false,
