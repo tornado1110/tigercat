@@ -229,7 +229,9 @@ describe("host-driven Codex plugin", () => {
     await client.callTool({ name: "wait", arguments: { ids: [id], mode: "all", timeout: 5_000 } });
     const second = payload(await client.callTool({ name: "read", arguments: { id } }));
     expect((second.events as Array<{ type: string }>).filter((event) => event.type === "worker.turn_end")).toHaveLength(2);
-    await client.callTool({ name: "kill", arguments: { id } });
+    const killed = await client.callTool({ name: "kill", arguments: { id } });
+    expect(killed.isError, JSON.stringify(killed.content)).not.toBe(true);
+    expect(payload(killed)).toMatchObject({ status: "killed" });
     expect(payload(await client.callTool({ name: "read", arguments: { id } })).state).toBe("killed");
   }, 60_000);
 
