@@ -1,6 +1,7 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { Readable, Transform, Writable } from "node:stream";
+import { promisify } from "node:util";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Clock } from "./clock.js";
 import { TigerError } from "./errors.js";
@@ -484,6 +485,7 @@ function killPosix(pid: number, proc: ChildProcess): void {
 
 const WINDOWS_REAP_TIMEOUT_MS = 20_000;
 const WINDOWS_CONFIRM_TIMEOUT_MS = 5_000;
+const execFileAsync = promisify(execFile);
 
 /**
  * Collect descendants while the parent is still alive, then taskkill /T /F.
@@ -606,17 +608,16 @@ async function reapWindowsTree(root: number): Promise<void> {
   let stdout = "";
   const powershell = path.join(windowsSystemRoot(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   try {
-    stdout = execFileSync(
+    ({ stdout } = await execFileAsync(
       powershell,
-      ["-NoProfile", "-NonInteractive", "-Command", "-"],
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_REAP_SCRIPT, "utf16le").toString("base64")],
       {
-        input: WINDOWS_REAP_SCRIPT,
         encoding: "utf8",
         windowsHide: true,
         timeout: WINDOWS_REAP_TIMEOUT_MS,
         env: windowsKillEnv(root),
       },
-    );
+    ));
   } catch (error) {
     const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr ?? "") : "";
     const message = error instanceof Error ? error.message : String(error);
