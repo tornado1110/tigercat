@@ -722,7 +722,13 @@ export class Engine {
     const session = await this.requireWorker(id);
     if (session.state === "killed") return { status: "killed", idempotent: true };
     const live = this.live.get(id);
-    if (live) live.suppressExit = true;
+    if (live) {
+      // Mark the session terminal before awaiting process shutdown. A prompt
+      // can resolve concurrently with kill(); without this guard its late
+      // turn_end transition could move the session back to idle.
+      live.suppressExit = true;
+      live.terminalEmitted = true;
+    }
     this.cancelPermissions(id);
     await live?.handle?.kill();
     if (live?.stall) this.clock.clearTimeout(live.stall);
@@ -993,7 +999,7 @@ export class Engine {
   private async finishTurn(workerId: string, stopReason: string, text: string): Promise<void> {
     if (this.closed) return;
     const live = this.liveOf(workerId);
-    if (live.terminalEmitted) return;
+    if (live.suppressExit || live.terminalEmitted) return;
     this.cancelPermissions(workerId);
     if (live.stall) this.clock.clearTimeout(live.stall);
     const awaitingInput = deriveAwaitingInput(stopReason, text);
