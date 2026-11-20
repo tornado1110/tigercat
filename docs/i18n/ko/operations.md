@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 965b9d6112f5db7d52033b70a309cd8a83044cf5 -->
+<!-- i18n-source: docs/operations.md @ 3452da8c151a5f5df97290f28906e96d7143b976 -->
 > 간체 중국어판이 기준입니다. 이 번역은 원문보다 늦을 수 있으며, 기계 번역의 도움을 받았습니다. 수정은 환영합니다.
 
 # TigerCat 운영

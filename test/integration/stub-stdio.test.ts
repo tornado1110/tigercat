@@ -236,8 +236,7 @@ describe("real stdio stub-agent", () => {
       prompt: "stuck",
       threads: ["feishu:eng:cli"],
     });
-    await waitForEvent(harness.engine, (event) => event.type === "worker.spawned");
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await waitForEvent(harness.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.update" && event.payload.text === "ignoring cancellation");
     await harness.engine.interrupt(spawned.workerId);
     const started = Date.now();
     let released = false;

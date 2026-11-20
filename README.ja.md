@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ f32cfb673524b693f5d707f1ac7ff5ea08ab9558 -->
+<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat
@@ -23,6 +23,7 @@ npm run build
 npm link
 
 tigercat runtime list
+tigercat runtime discover
 tigercat runtime test claude-code
 tigercat runtime test codex
 ```
@@ -34,8 +35,9 @@ tigercat runtime test codex
 バイナリを入れたあと、実際に動かすコマンドは次のとおりです。
 
 ```bash
-TIGERCAT_CLAUDE_BIN="$(command -v claude)" tigercat runtime test claude-code
-TIGERCAT_CODEX_BIN="$(command -v codex)" tigercat runtime test codex
+tigercat runtime discover --json
+tigercat runtime test claude-code
+tigercat runtime test codex
 ```
 
 `TIGERCAT_CLAUDE_BIN` は `CLAUDE_CODE_EXECUTABLE` として渡されます。`TIGERCAT_CODEX_BIN` は `CODEX_PATH` として渡されます。Claude Code は既存の `claude` ログイン、または `ANTHROPIC_API_KEY` を使います。Codex は `CODEX_API_KEY` または `OPENAI_API_KEY` を使います。画面の無いマシンでは `NO_BROWSER=1` を設定し、Codex が ChatGPT のログイン画面を開かないようにします。

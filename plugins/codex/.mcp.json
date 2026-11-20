@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tigercat": {
+      "command": "node",
+      "args": ["server/cli.js", "plugin"],
+      "cwd": "."
+    }
+  }
+}

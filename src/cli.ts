@@ -15,8 +15,9 @@ import {
 import { Engine } from "./engine.js";
 import { TigerError, isTigerError } from "./errors.js";
 import { serveMcp } from "./mcp.js";
+import { servePlugin } from "./plugin.js";
 import { listenForTools } from "./ipc.js";
-import { listRuntimes, planRuntimeTest, type ListedRuntime, type RuntimeTestPlan } from "./builtins.js";
+import { discoverRuntimes, listRuntimes, planRuntimeTest, type ListedRuntime, type RuntimeTestPlan } from "./builtins.js";
 import { redactText } from "./redact.js";
 import { ProcessRuntimeFactory } from "./runtime.js";
 import { chatRouterFromConfig } from "./router-llm.js";
@@ -71,6 +72,10 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
     return 0;
   }
   try {
+    if (command === "plugin") {
+      await servePlugin(typeof values.config === "string" ? values.config : undefined);
+      return 0;
+    }
     if (command === "acp") {
       return await cmdAcp(typeof values.config === "string" ? values.config : undefined);
     }
@@ -116,6 +121,7 @@ async function cmdAcp(configFile: string | undefined): Promise<number> {
     if (key) engine.noteSecret(router.apiKeyEnv, key);
   }
   const ipc = await listenForTools(engine.tools);
+  engine.noteSecret("TIGERCAT_WORKER_IPC_TOKEN", ipc.workerToken);
   engine.attachIpc({
     port: ipc.port,
     token: ipc.token,
@@ -129,7 +135,7 @@ async function cmdAcp(configFile: string | undefined): Promise<number> {
           "--port",
           String(ipc.port),
           "--token",
-          ipc.token,
+          role === "worker" ? ipc.workerToken : ipc.token,
           "--role",
           role,
         ],
@@ -156,6 +162,11 @@ async function cmdRuntime(
   const config = loadConfig(file);
   if (sub === "list") {
     const payload = listRuntimes(config);
+    io.stdout(values.json ? `${JSON.stringify(payload)}\n` : formatRuntimes(payload));
+    return 0;
+  }
+  if (sub === "discover") {
+    const payload = discoverRuntimes(config);
     io.stdout(values.json ? `${JSON.stringify(payload)}\n` : formatRuntimes(payload));
     return 0;
   }
@@ -192,7 +203,7 @@ async function cmdRuntime(
     io.stdout(`${JSON.stringify(report)}\n`);
     return report.ok ? 0 : 1;
   }
-  throw new TigerError("usage", "usage: tigercat runtime add|list|remove|test");
+  throw new TigerError("usage", "usage: tigercat runtime add|list|discover|remove|test");
 }
 
 async function testRuntime(plan: RuntimeTestPlan): Promise<Record<string, unknown>> {
@@ -253,7 +264,7 @@ async function cmdTool(
   values: Record<string, unknown>,
   io: CliIo,
 ): Promise<number> {
-  const known = ["spawn", "list", "send", "read", "interrupt", "wait", "kill", "subscribe", "unsubscribe"];
+  const known = ["spawn", "resume", "list", "send", "read", "interrupt", "wait", "kill", "subscribe", "unsubscribe"];
   if (!known.includes(command)) throw new TigerError("usage", `unknown command ${command}`);
   const file = configPath(typeof values.config === "string" ? values.config : undefined);
   const config = loadConfig(file);
@@ -295,6 +306,8 @@ async function runTool(
       });
     case "list":
       return engine.list();
+    case "resume":
+      return engine.resume(args[0] ?? "", args.slice(1).join(" "));
     case "send":
       return engine.send(args[0] ?? "", args.slice(1).join(" "));
     case "read":
@@ -350,7 +363,8 @@ function formatRuntimes(runtimes: ListedRuntime[]): string {
     .map((runtime) => {
       const kind = runtime.overridden ? "override" : runtime.builtin ? "builtin" : "config";
       const mode = runtime.testMode ? `\t${runtime.testMode}` : "";
-      return `${runtime.name}\t${runtime.command} ${runtime.args.join(" ")}\t${runtime.permission}\t${kind}${mode}`;
+      const vendor = runtime.vendorPath ? `\tvendor=${runtime.vendorPath}` : "";
+      return `${runtime.name}\t${runtime.command} ${runtime.args.join(" ")}\t${runtime.permission}\t${kind}${mode}${vendor}`;
     })
     .join("\n") + "\n";
 }
@@ -375,13 +389,15 @@ A Super-agent router for coding agents.
 
 Usage:
   tigercat acp [--config file]
+  tigercat plugin [--config file]  MCP tools for a host-driven Codex plugin
   tigercat runtime add <name> --command <cmd> [--arg a] [--env K=V] [--tag t] [--permission ask|auto|deny]
     --env is written to config.toml in plaintext. Do not put API keys there.
   tigercat runtime list
+  tigercat runtime discover   # probe local Claude Code and Codex binaries
   tigercat runtime remove <name>
   tigercat runtime test <name>
   tigercat spawn --runtime <name> --thread <id> <task>
-  tigercat list|send|read|interrupt|wait|kill|subscribe|unsubscribe
+  tigercat list|send|read|interrupt|wait|kill|resume|subscribe|unsubscribe
 
 Built-in workers: claude-code, codex.
 When claude or codex is absent, runtime test handshakes a local dry-run agent.

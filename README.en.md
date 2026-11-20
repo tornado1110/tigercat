@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ f32cfb673524b693f5d707f1ac7ff5ea08ab9558 -->
+<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it.
 
 # TigerCat
@@ -23,6 +23,7 @@ npm run build
 npm link
 
 tigercat runtime list
+tigercat runtime discover
 tigercat runtime test claude-code
 tigercat runtime test codex
 ```
@@ -34,11 +35,17 @@ With no `claude` or `codex` binary, and with `TIGERCAT_RUNTIME_LIVE` unset, that
 A real run, once the binary is installed:
 
 ```bash
-TIGERCAT_CLAUDE_BIN="$(command -v claude)" tigercat runtime test claude-code
-TIGERCAT_CODEX_BIN="$(command -v codex)" tigercat runtime test codex
+tigercat runtime discover --json
+tigercat runtime test claude-code
+tigercat runtime test codex
 ```
 
 `TIGERCAT_CLAUDE_BIN` is forwarded as `CLAUDE_CODE_EXECUTABLE`. `TIGERCAT_CODEX_BIN` is forwarded as `CODEX_PATH`. Claude Code uses an existing `claude` login or `ANTHROPIC_API_KEY`. Codex uses `CODEX_API_KEY` or `OPENAI_API_KEY`. On a headless machine set `NO_BROWSER=1` so Codex does not open a ChatGPT login.
+
+Workers do not inherit Router, plugin, or channel tokens. Other secret-shaped
+host variables are filtered; custom runtime credentials must be listed in that
+runtime's own `env` table (which is stored in plaintext), while the documented
+built-in vendor variables are retained.
 
 The adapters also bundle a CLI. `TIGERCAT_RUNTIME_LIVE=1` launches that adapter when the vendor binary is not on `PATH`. That downloads the package and talks to the vendor, so it needs credentials:
 

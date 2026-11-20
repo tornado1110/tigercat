@@ -2,11 +2,13 @@
 
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
 
-面向编程代理的 Super-agent 路由器：一个常驻的 ACP 路由器，把工作分发给 Claude Code、Codex，或任何 ACP agent。
+面向编程代理的任务与 Worker 编排工具，可独立运行，也可作为 Codex 插件提供。
 
-TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。对上游而言，它**就是**一个 ACP agent（`tigercat acp`），因此 cc-connect 或 Zed 这样的宿主可以驱动它。对下游而言，它是 ACP 客户端，会在任一已注册的 ACP runtime 上启动 Worker。飞书和钉钉留在那些宿主里；TigerCat 不实现 IM 频道。
+TigerCat 有两种交付形态，复用同一个 Engine 和 Worker 协议：独立运行时用 `tigercat acp`；作为 Codex 插件时，由当前 Codex 会话使用 TigerCat 的 MCP 工具调度 Worker，无需另外启动 Router 模型。插件目录为 [`plugins/codex`](plugins/codex/README.md)。
 
-它不是 subagent 工具。常驻的 Router 只做路由，并与人对话。每个 Worker 负责一个任务，订阅 Thread，再向 Router 回报。
+TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。独立模式对上游提供 ACP agent（`tigercat acp`），供 cc-connect 或 Zed 这样的宿主驱动；插件模式对当前 Codex 会话提供 Skill 和 MCP 工具。两种模式对下游都是 ACP 客户端，在已注册的 runtime 上启动 Worker。飞书和钉钉由可选宿主接入。
+
+调度者负责路由和对话，每个 Worker 负责一个任务，订阅 Thread，再回报执行结果。独立模式由 TigerCat Router 调度，插件模式由当前 Codex 会话调度。
 
 本仓库是第 1 周的可行性骨架，还不是完成的 M0。真实的 Claude Code / Codex 会话、一次飞书往返、用真实模型担任 Router，以及「某个厂商的 harness 没有原生 shell 或编辑工具」这一证明，都尚未验证。CI 通过 stdio stub 驱动 `claude-code` 和 `codex` 这两个 profile。真实二进制的手动命令见下文。TigerCat 自己的 MCP 目录不收录那些工具，这并不能说明下游 agent 自己带了哪些工具。跨频道进入和共享 PR 进入属于 M1，不是这个骨架的范围。
 
@@ -20,24 +22,46 @@ npm run build
 npm link
 
 tigercat runtime list
+tigercat runtime discover
 tigercat runtime test claude-code
 tigercat runtime test codex
 ```
 
-`claude-code` 和 `codex` 是内置的。`runtime test` 会执行 `initialize`、`session/new` 和 `session/prompt`。
+## Codex 插件
+
+运行 `npm ci`，再运行 `npm run build:plugin`。
+
+生成的 `plugins/codex/` 包含插件清单、Skill、本地 MCP 服务和生产依赖，可整体复制分发。按 [Codex 插件文档](https://developers.openai.com/plugins/build/plugins) 将它添加为本地插件源；本仓库不修改全局 Codex 配置，也不自动安装插件。
+
+同一目录里的 `server/cli.js plugin` 是普通 MCP 入口，也可由 Claude Code 或其他 MCP 宿主启动；将其工作目录设为插件根目录，跨机器时用绝对路径。`.codex-plugin` 清单只负责 Codex 的安装发现，Worker/ACP 核心不依赖特定宿主。
+
+当前 Codex 会话可以调用 `runtimes`、`spawn`、`resume`、`list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe` 和 `unsubscribe`；配置 Lark 绑定后还会出现 `lark_status`、`lark_discover` 和 `lark_execute`。`spawn` 必须带用户项目的绝对 `cwd`；`wait` 每次最多 30 秒。插件启动目录是安装目录，不能据此推断项目路径。Worker 的实际编程能力仍来自所选 ACP runtime。
+
+Worker 的 `permission = "ask"` 会通过 MCP elicitation 交给当前 Codex 宿主审批；宿主不支持审批 UI 或用户拒绝时，Worker 只会取消，TigerCat 不会自动放行。插件还提供可选的本地 `lark-cli` capability（需宿主显式配置绑定），用于按 profile 读取授权状态、按需发现能力和执行用户明确授权的业务命令；未知写入结果不会盲重试。
+
+MCP 连接关闭时会清理 Worker。默认每个插件进程有隔离的临时状态；设置 `TIGERCAT_PLUGIN_DB` 可保留历史，同一个数据库只允许一个插件进程占用。重启后旧 Worker 标为中断，不自动重放任务；异常退出遗留的 `.plugin-lock` 需要确认旧进程退出后再移除。当前版本没有自动唤醒 Codex 会话、断线继续执行或持久结果投递的承诺。
+
+飞书渠道和 `lark-cli` 是可选集成，与这两种交付形态独立。DeerFlow 的授权、profile、消息和文件交付细节及尚需实现的接口见 [集成分析](docs/lark-cli-integration.md)；目前还不能称飞书渠道完备。
+
+## 独立运行时
+
+`claude-code` 和 `codex` 是内置的。`runtime discover`（`runtime list --json` 也会显示同样的字段）会从当前进程的 `PATH` 自动找到本机 `claude`、`codex`，并报告绝对路径；显式的 `TIGERCAT_CLAUDE_BIN`、`TIGERCAT_CODEX_BIN` 优先。`runtime test` 会执行 `initialize`、`session/new` 和 `session/prompt`。
 
 如果没有 `claude` 或 `codex` 二进制，并且没有设置 `TIGERCAT_RUNTIME_LIVE`，这次测试会与本地的 dry-run agent 完成握手。报告中为 `mode: "dry-run"` 和 `vendorExecuted: false`。Claude Code 和 Codex 不会启动，也不会读取 API key。
 
-二进制装好之后，真实跑法如下：
+发现本地二进制后，真实跑法如下；不需要再手工填路径：
 
 ```bash
-TIGERCAT_CLAUDE_BIN="$(command -v claude)" tigercat runtime test claude-code
-TIGERCAT_CODEX_BIN="$(command -v codex)" tigercat runtime test codex
+tigercat runtime discover --json
+tigercat runtime test claude-code
+tigercat runtime test codex
 ```
 
 `TIGERCAT_CLAUDE_BIN` 会作为 `CLAUDE_CODE_EXECUTABLE` 往下传。`TIGERCAT_CODEX_BIN` 会作为 `CODEX_PATH` 往下传。Claude Code 使用已有的 `claude` 登录，或 `ANTHROPIC_API_KEY`。Codex 使用 `CODEX_API_KEY` 或 `OPENAI_API_KEY`。在没有图形界面的机器上设置 `NO_BROWSER=1`，避免 Codex 打开 ChatGPT 登录页。
 
-这些 adapter 也自带一个 CLI。当厂商二进制不在 `PATH` 上时，`TIGERCAT_RUNTIME_LIVE=1` 会启动这个 adapter。这会下载软件包并与厂商通信，因此需要凭据：
+Worker 不会继承 Router、插件或频道令牌；宿主环境里的其他密钥形状变量也会被过滤。自定义 runtime 需要的凭据请放在它自己的 `env` 中（配置文件会明文保存），内置 Worker 的文档变量会自动保留。
+
+这些 adapter 已随项目依赖和 Codex 插件 bundle 固定。厂商二进制不在 `PATH` 上时，`TIGERCAT_RUNTIME_LIVE=1` 会启动本地 adapter。这会与厂商通信，因此需要凭据：
 
 ```bash
 TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test claude-code
@@ -99,6 +123,8 @@ args = ["acp"]
 ```
 
 宿主知道话题或 pull request 时，把 Thread id 放在 prompt 的 `_meta.thread_id` 上。如果没有，上游会话自己就是一个 Thread（`acp:<sessionId>`）。
+
+宿主重投同一条事件时，应复用 `_meta.event_id`（非空字符串）；可同时传 `_meta.timestamp`（非负毫秒时间戳）。同一身份只接纳一次，内容变更返回冲突；有事件 ID 但省略时间时使用稳定的 `0`。不传事件 ID 的普通 prompt 仍是独立提交。认领后未完成的提交返回 `ingest_incomplete`，需要核对已有执行，不能盲目重放。
 
 ## 运维
 

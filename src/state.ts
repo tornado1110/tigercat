@@ -20,7 +20,7 @@ const LEGAL: Record<SessionState, readonly SessionState[]> = {
   error: ["killed"],
   killed: [],
   finished: ["killed"],
-  interrupted: ["killed", "running"],
+  interrupted: ["killed", "running", "starting"],
 };
 
 export function canTransition(from: SessionState, to: SessionState): boolean {

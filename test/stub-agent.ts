@@ -67,6 +67,7 @@ const connection = acp
     }
     if (scenario === "ignore-cancel") {
       // Stay in the turn until the process is killed. session/cancel is ignored above.
+      await chunk(client, params.sessionId, "ignoring cancellation");
       await new Promise<void>(() => undefined);
     }
     if (scenario === "hang") {

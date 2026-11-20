@@ -1,0 +1,20 @@
+{
+  "name": "tigercat-local",
+  "interface": {
+    "displayName": "TigerCat"
+  },
+  "plugins": [
+    {
+      "name": "tigercat",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

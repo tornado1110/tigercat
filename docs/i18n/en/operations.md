@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 965b9d6112f5db7d52033b70a309cd8a83044cf5 -->
+<!-- i18n-source: docs/operations.md @ 3452da8c151a5f5df97290f28906e96d7143b976 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it.
 
 # Operating TigerCat
@@ -58,16 +58,24 @@ below.
 `runtime list` prints name, command, args, permission, and whether the row is
 a built-in. It does not print environment values.
 
+`runtime discover` probes the current host's `PATH` and explicit
+`TIGERCAT_CLAUDE_BIN`, `TIGERCAT_CODEX_BIN`, or `CODEX_PATH` overrides. It marks
+only existing executable files as found and prints their absolute paths; it
+does not run a vendor binary, access the network, or read an API key.
+`runtime test` remains the command that performs a handshake.
+
 ## Credentials
 
-With `router.provider = "deepseek"`, `tigercat acp` reads `DEEPSEEK_API_KEY` (or the configured env name) and exits before any request when that variable is missing. That call has not been live-tested. Worker credentials are still whatever the child process already has.
+With `router.provider = "deepseek"`, `tigercat acp` reads `DEEPSEEK_API_KEY` (or the configured env name) and exits before any request when that variable is missing. That call has not been live-tested. Worker credentials come from the documented vendor variables or the runtime's explicit `env` table.
 
-The child environment is the parent environment plus that runtime's `env`
-table. A variable exported in the shell that starts `tigercat acp` is visible
-to the Router process and to every Worker. An `env` entry adds a variable for
-that runtime; it does not remove variables inherited from the parent. There is
-no per-runtime secret sandbox. That isolation has not been verified with live
-processes.
+Workers do not receive the host environment unchanged. TigerCat removes
+inherited Router, plugin, Feishu, and cc-connect paths and tokens, as well as
+secret-shaped variables; the documented vendor credentials (`ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `CODEX_API_KEY`, `OPENAI_API_KEY`, and the corresponding
+binary paths) remain available to built-in Workers. A runtime's own `env` table
+is merged after this filter, so put only values that runtime really needs there;
+they are written to `config.toml` in plaintext. A Worker cannot read the
+Router's inherited `DEEPSEEK_API_KEY` or cc-connect's `CC_SESSION_KEY`.
 
 Keep the three credential sets apart:
 
@@ -83,8 +91,9 @@ Keep the three credential sets apart:
    programs' variables; TigerCat does not parse them. `TIGERCAT_CLAUDE_BIN` is
    forwarded as `CLAUDE_CODE_EXECUTABLE`. `TIGERCAT_CODEX_BIN` is forwarded as
    `CODEX_PATH`. To keep a Router key out of a Worker, do not export it in the
-   parent environment. Prefer each product's own login files over putting keys
-   in `runtime add --env`.
+   inherited environment is filtered; pass any other credential explicitly in
+   that runtime's `env` table and remember that it is written to the config in
+   plaintext. Prefer each product's own login files.
 3. **cc-connect and Feishu.** The host owns the channel. TigerCat's registration
    is only:
 

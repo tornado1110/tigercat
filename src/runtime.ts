@@ -133,18 +133,98 @@ export interface ProcessRuntimeOptions {
   handshakeTimeoutMs?: number;
 }
 
+/**
+ * Names that belong to TigerCat's host/channel plumbing. They are not needed
+ * by an ACP Worker and should not cross the process boundary when they happen
+ * to be exported by the host shell. Runtime-specific env remains an explicit
+ * escape hatch and is merged after this filter.
+ */
+const PRIVATE_INHERITED_ENV = new Set([
+  "TIGERCAT_CONFIG",
+  "TIGERCAT_DB",
+  "TIGERCAT_PLUGIN_DB",
+  "TIGERCAT_IPC_TOKEN",
+  "TIGERCAT_WORKER_IPC_TOKEN",
+  "TIGERCAT_LARK_ACCOUNT_REF",
+  "TIGERCAT_LARK_PROFILE_REF",
+  "TIGERCAT_LARK_CREDENTIAL_HOME",
+  "TIGERCAT_LARK_CREDENTIAL_REVISION",
+  "TIGERCAT_LARK_BIN",
+  "TIGERCAT_LARK_EXPECTED_VERSION",
+  "TIGERCAT_LARK_VERSION_POLICY",
+  "CC_SESSION_KEY",
+  "CC_PROJECT",
+]);
+
+const CLAUDE_CREDENTIAL_ENV = new Set([
+  // These are the documented vendor credentials/overrides consumed by the
+  // Claude adapter. Other secret-shaped variables must be configured on a
+  // specific runtime instead of inherited by every Worker.
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_EXECUTABLE",
+]);
+
+const CODEX_CREDENTIAL_ENV = new Set([
+  // These are the documented vendor credentials/override consumed by the
+  // Codex adapter.
+  "CODEX_API_KEY",
+  "CODEX_PATH",
+  "OPENAI_API_KEY",
+]);
+
+function secretShapedEnv(name: string): boolean {
+  return /(?:API_KEY|AUTH_TOKEN|ACCESS_TOKEN|SECRET|PASSWORD|CREDENTIAL|TOKEN)/i.test(name);
+}
+
+/** Build the environment visible to a downstream ACP process. Only the
+ * credential variables belonging to the named built-in adapter are inherited;
+ * custom runtimes must provide their own credentials explicitly. */
+export function buildWorkerEnvironment(
+  runtimeEnv: Record<string, string>,
+  parentEnv: NodeJS.ProcessEnv = process.env,
+  runtimeName?: string,
+): NodeJS.ProcessEnv {
+  const inherited: NodeJS.ProcessEnv = {};
+  const allowedCredentials = runtimeName === "claude-code"
+    ? CLAUDE_CREDENTIAL_ENV
+    : runtimeName === "codex"
+      ? CODEX_CREDENTIAL_ENV
+      : new Set<string>();
+  for (const [name, value] of Object.entries(parentEnv)) {
+    // Windows environment names are case-insensitive even when Node exposes
+    // the spelling used by the parent process.
+    const canonical = name.toUpperCase();
+    if (PRIVATE_INHERITED_ENV.has(canonical)) continue;
+    if (secretShapedEnv(canonical) && !allowedCredentials.has(canonical)) continue;
+    inherited[name] = value;
+  }
+  return { ...inherited, ...runtimeEnv };
+}
+
 export class ProcessRuntimeFactory implements RuntimeFactory {
   constructor(private readonly options: ProcessRuntimeOptions = {}) {}
 
   async launch(runtime: RuntimeConfig, ctx: LaunchContext): Promise<RuntimeHandle> {
     const proc = spawn(runtime.command, runtime.args, {
       cwd: ctx.cwd,
-      env: { ...process.env, ...runtime.env },
+      env: buildWorkerEnvironment(runtime.env, process.env, runtime.name),
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
       windowsHide: true,
       windowsVerbatimArguments: runtime.windowsVerbatimArguments === true,
     });
+    // `spawn()` reports ENOENT/EACCES asynchronously. Keep a listener from
+    // the first tick so a bad local binary becomes a typed launch failure
+    // instead of an uncaught `error` event that kills the host process.
+    let rejectLaunchError!: (error: Error) => void;
+    const launchError = new Promise<never>((_, reject) => {
+      rejectLaunchError = reject;
+    });
+    const onLaunchError = (error: Error): void => {
+      rejectLaunchError(new TigerError("bad_runtime", `${runtime.name}: process could not start: ${redactText(error.message)}`));
+    };
+    proc.once("error", onLaunchError);
     let stderr = "";
     proc.stderr?.setEncoding("utf8");
     proc.stderr?.on("data", (chunk: string) => {
@@ -207,17 +287,20 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
 
     try {
       const init = await withTimeout(
-        connection.agent.request(acp.methods.agent.initialize, {
-          protocolVersion: acp.PROTOCOL_VERSION,
-          clientCapabilities: {
-            fs: {
-              readTextFile: ctx.role === "worker",
-              writeTextFile: ctx.role === "worker",
+        Promise.race([
+          connection.agent.request(acp.methods.agent.initialize, {
+            protocolVersion: acp.PROTOCOL_VERSION,
+            clientCapabilities: {
+              fs: {
+                readTextFile: ctx.role === "worker",
+                writeTextFile: ctx.role === "worker",
+              },
+              terminal: false,
             },
-            terminal: false,
-          },
-          clientInfo: { name: "tigercat", version: "0.1.0" },
-        }),
+            clientInfo: { name: "tigercat", version: "0.1.0" },
+          }),
+          launchError,
+        ]),
         timeoutMs,
         "initialize timed out",
       );
@@ -228,15 +311,19 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
         );
       }
       const session = await withTimeout(
-        connection.agent
-          .buildSession({
-            cwd: ctx.cwd,
-            mcpServers: ctx.mcpServers ?? [],
-          })
-          .start(),
+        Promise.race([
+          connection.agent
+            .buildSession({
+              cwd: ctx.cwd,
+              mcpServers: ctx.mcpServers ?? [],
+            })
+            .start(),
+          launchError,
+        ]),
         timeoutMs,
         "session/new timed out",
       );
+      proc.off("error", onLaunchError);
       return new ProcessHandle(proc, connection, session, updates, ctx.onExit);
     } catch (error) {
       let killMessage = "";
@@ -245,6 +332,7 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
       } catch (killError) {
         killMessage = killError instanceof Error ? ` (kill: ${killError.message})` : "";
       }
+      proc.off("error", onLaunchError);
       connection.close();
       const message = error instanceof Error ? error.message : String(error);
       const detail = stderr ? ` (${redactText(stderr.trim())})` : "";
@@ -260,6 +348,7 @@ class ProcessHandle implements RuntimeHandle {
   private promptReject: ((error: Error) => void) | undefined;
   private exited = false;
   private suppressExit = false;
+  private exitReported = false;
 
   constructor(
     private readonly proc: ChildProcess,
@@ -271,9 +360,20 @@ class ProcessHandle implements RuntimeHandle {
     this.proc.on("exit", (code, signal) => {
       this.exited = true;
       this.promptReject?.(new TigerError("worker_exited", "runtime process exited"));
-      if (this.suppressExit) return;
-      this.onExit?.({ code, signal });
+      this.reportExit({ code, signal });
     });
+    this.proc.on("error", (error) => {
+      this.exited = true;
+      this.promptReject?.(new TigerError("worker_exited", `runtime process error: ${redactText(error.message)}`));
+      try { this.connection.close(); } catch { /* already closing */ }
+      this.reportExit({ code: null, signal: null });
+    });
+  }
+
+  private reportExit(info: { code: number | null; signal: NodeJS.Signals | null }): void {
+    if (this.suppressExit || this.exitReported) return;
+    this.exitReported = true;
+    this.onExit?.(info);
   }
 
   get pid(): number | undefined {

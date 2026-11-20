@@ -1,4 +1,6 @@
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildAdapterCommand,
@@ -19,14 +21,21 @@ describe("built-in ACP runtimes", () => {
   it("pins the official claude-code and codex adapters", () => {
     const claude = launchConfig(builtinByName("claude-code")!, quiet);
     const codex = launchConfig(builtinByName("codex")!, quiet);
+    const installedClaude = path.resolve("node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js");
+    const installedCodex = path.resolve("node_modules/@agentclientprotocol/codex-acp/dist/index.js");
     const npxCliExists = process.platform === "win32" && existsSync(npxCliPath(process.execPath));
     const claudeNpx = buildAdapterCommand(process.platform, quiet, {
       execPath: process.execPath,
       npxArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.108.0"],
       npxCliExists,
     });
-    expect(claude.command).toBe(process.platform === "win32" ? claudeNpx.command : "npx");
-    expect(claude.args).toEqual(process.platform === "win32" ? claudeNpx.args : ["-y", "@agentclientprotocol/claude-agent-acp@0.108.0"]);
+    if (existsSync(installedClaude)) {
+      expect(claude.command).toBe(process.execPath);
+      expect(claude.args).toEqual([installedClaude]);
+    } else {
+      expect(claude.command).toBe(process.platform === "win32" ? claudeNpx.command : "npx");
+      expect(claude.args).toEqual(process.platform === "win32" ? claudeNpx.args : ["-y", "@agentclientprotocol/claude-agent-acp@0.108.0"]);
+    }
     expect(claude.env.CLAUDE_AGENT_ACP_PROTOCOL).toBe("v1");
     expect(claude.env.CLAUDE_CODE_EXECUTABLE).toBeUndefined();
     const codexNpx = buildAdapterCommand(process.platform, quiet, {
@@ -34,8 +43,13 @@ describe("built-in ACP runtimes", () => {
       npxArgs: ["-y", "@agentclientprotocol/codex-acp@2.7.0"],
       npxCliExists,
     });
-    expect(codex.command).toBe(process.platform === "win32" ? codexNpx.command : "npx");
-    expect(codex.args).toEqual(process.platform === "win32" ? codexNpx.args : ["-y", "@agentclientprotocol/codex-acp@2.7.0"]);
+    if (existsSync(installedCodex)) {
+      expect(codex.command).toBe(process.execPath);
+      expect(codex.args).toEqual([installedCodex]);
+    } else {
+      expect(codex.command).toBe(process.platform === "win32" ? codexNpx.command : "npx");
+      expect(codex.args).toEqual(process.platform === "win32" ? codexNpx.args : ["-y", "@agentclientprotocol/codex-acp@2.7.0"]);
+    }
     expect(codex.env.CODEX_PATH).toBeUndefined();
   });
 
@@ -56,7 +70,40 @@ describe("built-in ACP runtimes", () => {
   it("uses the adapter when a real run is requested", () => {
     const plan = planRuntimeTest(defaultConfig(), "codex", { PATH: "", TIGERCAT_RUNTIME_LIVE: "1" });
     expect(plan.mode).toBe("adapter");
-    expect(plan.launch.args.join(" ")).toContain("@agentclientprotocol/codex-acp@2.7.0");
+    expect(plan.launch.command === process.execPath || plan.launch.args.join(" ").includes("@agentclientprotocol/codex-acp@2.7.0")).toBe(true);
+  });
+
+  it("discovers local vendor binaries from PATH without an environment override", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "tigercat-runtime-discovery-"));
+    try {
+      const claude = path.join(root, "claude");
+      const codex = path.join(root, "codex");
+      writeFileSync(claude, "#!/bin/sh\n");
+      writeFileSync(codex, "#!/bin/sh\n");
+      chmodSync(claude, 0o755);
+      chmodSync(codex, 0o755);
+      const env = { PATH: path.relative(process.cwd(), root) };
+      const listed = listRuntimes(defaultConfig(), env);
+      expect(listed.find((runtime) => runtime.name === "claude-code")).toMatchObject({ vendorFound: true, vendorPath: claude, testMode: "adapter" });
+      expect(listed.find((runtime) => runtime.name === "codex")).toMatchObject({ vendorFound: true, vendorPath: codex, testMode: "adapter" });
+      expect(launchConfig(builtinByName("codex")!, env).env.CODEX_PATH).toBe(codex);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mistake a non-executable PATH file for a vendor binary", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "tigercat-runtime-discovery-mode-"));
+    try {
+      writeFileSync(path.join(root, "claude"), "#!/bin/sh\n");
+      const listed = listRuntimes(defaultConfig(), { PATH: root });
+      expect(listed.find((runtime) => runtime.name === "claude-code")).toMatchObject({
+        vendorFound: false,
+        testMode: "dry-run",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("prefers a configured runtime over the built-in launch", () => {

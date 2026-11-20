@@ -3,17 +3,205 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Engine, IngestResult } from "./engine.js";
+import type { DeliveryBindingRecord } from "./store.js";
+import type { TriggerInput } from "./types.js";
 import {
   CC_CONNECT_DELIVERY_GAP,
-  createWorkerResultRelay,
   deliverViaCcConnect,
   planCcConnectDelivery,
+  workerResultText,
 } from "./upstream-delivery.js";
+import { destinationIdentity, DurableDeliveryService, type DurableDeliveryTarget } from "./durable-delivery.js";
 import { VERSION } from "./version.js";
 
 interface UpstreamSession {
   pending: AbortController | null;
   mcp: Client[];
+}
+
+interface DeliveryBinding {
+  bindingId: string;
+  destinationId: string;
+  target: DurableDeliveryTarget;
+  baseline: number;
+}
+
+/** Process-local hook feeding a SQLite outbox. The target is captured when a
+ * prompt is accepted, so a later restart cannot accidentally use new env. */
+class AcpDeliveryManager {
+  private readonly bindings = new Map<string, DeliveryBinding[]>();
+  private readonly handledEvents = new Set<string>();
+  private readonly consumedBindings = new Set<string>();
+  private readonly outbox: DurableDeliveryService;
+  private readonly unsubscribe: () => void;
+
+  constructor(private readonly engine: Engine) {
+    this.outbox = new DurableDeliveryService(engine.store, {
+      send: async ({ text, target }) => {
+        const env: NodeJS.ProcessEnv = {
+          ...target,
+        };
+        const plan = planCcConnectDelivery(env);
+        if (!plan.ok) return { disposition: "not_sent", reason: plan.reason };
+        const outcome = await deliverViaCcConnect(text, env);
+        // cc-connect's non-zero exit can happen after it accepted the body;
+        // preserve that uncertainty instead of blindly sending a duplicate.
+        return {
+          disposition: outcome.delivered ? "delivered" : "unknown",
+          reason: outcome.reason,
+        };
+      },
+    }, { clock: engine.clock });
+    this.unsubscribe = engine.addHook((event) => {
+      if (event.type !== "worker.turn_end" && event.type !== "worker.error") return;
+      void this.routeEvent(event).catch(() => undefined);
+    });
+  }
+
+  async start(): Promise<void> {
+    await this.outbox.start();
+    // Restore route watches before replaying terminal events. This covers a
+    // process that died after a prompt was accepted but before its result.
+    for (const binding of await this.engine.store.listDeliveryBindings()) this.remember(binding);
+    for (const event of await this.engine.events()) {
+      if (event.type === "worker.turn_end" || event.type === "worker.error") await this.routeEvent(event, false);
+    }
+    // Pending sends have their destination snapshot in SQLite, so reconnect
+    // recovery can retry proven-not-sent work without consulting new env.
+    await this.outbox.pump();
+  }
+
+  async bind(workerIds: string[], target: DurableDeliveryTarget, baseline: Map<string, number>, intentId: string): Promise<void> {
+    const destinationId = Object.keys(target).length === 0 ? "dst_unconfigured" : destinationIdentity(target);
+    for (const workerId of workerIds) {
+      const baselineSeq = baseline.get(workerId) ?? 0;
+      const bindingId = `route_${intentId}_${workerId}`;
+      const key = bindingKey(bindingId);
+      if (this.consumedBindings.has(key)) continue;
+      const binding = await this.engine.store.putDeliveryBinding({
+        bindingId,
+        workerId,
+        destinationId,
+        target: { ...target },
+        baselineSeq,
+        createdAt: this.engine.clock.now(),
+      });
+      this.remember(binding);
+    }
+  }
+
+  async replay(
+    events: Awaited<ReturnType<Engine["events"]>>,
+    workerIds: string[],
+    target: DurableDeliveryTarget,
+    baseline: Map<string, number>,
+    intentId: string,
+    dispatch = true,
+  ): Promise<void> {
+    await this.bind(workerIds, target, baseline, intentId);
+    const ids = new Set(workerIds);
+    for (const event of events) {
+      if (!ids.has(event.workerId) || (event.type !== "worker.turn_end" && event.type !== "worker.error")) continue;
+      if (event.seq <= (baseline.get(event.workerId) ?? 0)) continue;
+      await this.routeEvent(event, false);
+    }
+    if (dispatch) await this.outbox.pump();
+  }
+
+  private async routeEvent(event: Awaited<ReturnType<Engine["events"]>>[number], dispatch = true): Promise<void> {
+    if (this.handledEvents.has(event.id)) return;
+    let claimed = false;
+    for (;;) {
+      const consumed = await this.engine.store.claimDeliveryBindingAndPut({
+        workerId: event.workerId,
+        eventSeq: event.seq,
+        eventId: event.id,
+        text: workerResultText(event),
+        createdAt: event.createdAt,
+      });
+      if (!consumed) break;
+      const { binding } = consumed;
+      claimed = true;
+      this.forget(binding);
+      this.consumedBindings.add(bindingKey(binding.bindingId));
+    }
+    if (claimed) {
+      this.handledEvents.add(event.id);
+      if (dispatch) await this.outbox.pump();
+    }
+  }
+
+  private remember(binding: DeliveryBindingRecord): void {
+    const entries = this.bindings.get(binding.workerId) ?? [];
+    if (!entries.some((entry) => entry.bindingId === binding.bindingId)) {
+      entries.push({ bindingId: binding.bindingId, destinationId: binding.destinationId, target: { ...binding.target }, baseline: binding.baselineSeq });
+      entries.sort((a, b) => a.baseline - b.baseline);
+    }
+    this.bindings.set(binding.workerId, entries);
+  }
+
+  private forget(binding: DeliveryBindingRecord): void {
+    const entries = this.bindings.get(binding.workerId);
+    if (!entries) return;
+    const remaining = entries.filter((entry) => entry.bindingId !== binding.bindingId);
+    if (remaining.length === 0) this.bindings.delete(binding.workerId);
+    else this.bindings.set(binding.workerId, remaining);
+  }
+
+  async stop(): Promise<void> {
+    this.unsubscribe();
+    await this.outbox.stop();
+  }
+
+  async outboxPump(): Promise<void> {
+    await this.outbox.pump();
+  }
+}
+
+function bindingKey(bindingId: string): string {
+  return bindingId;
+}
+
+function captureCcTarget(env: NodeJS.ProcessEnv = process.env): DurableDeliveryTarget {
+  const target: DurableDeliveryTarget = {};
+  for (const key of ["CC_PROJECT", "CC_SESSION_KEY"]) {
+    const value = env[key]?.trim();
+    if (value) target[key] = value;
+  }
+  // Persist the executable choice too; a restart must not silently resolve a
+  // different cc-connect binary from a changed PATH.
+  target.TIGERCAT_CC_CONNECT_BIN = env.TIGERCAT_CC_CONNECT_BIN?.trim() || "cc-connect";
+  return target;
+}
+
+/** Stable optional provider identity carried by the ACP host. */
+export function triggerFromAcpPrompt(params: acp.PromptRequest, receivedAt: number): TriggerInput {
+  const meta = params._meta ?? {};
+  const eventId = meta.event_id;
+  const timestamp = meta.timestamp;
+  if (eventId !== undefined && (typeof eventId !== "string" || eventId.trim() === "")) {
+    throw acp.RequestError.invalidParams({ field: "_meta.event_id" }, "_meta.event_id must be a non-empty string");
+  }
+  if (timestamp !== undefined && (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp < 0)) {
+    throw acp.RequestError.invalidParams({ field: "_meta.timestamp" }, "_meta.timestamp must be a finite non-negative number");
+  }
+  const text = params.prompt
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .filter(Boolean)
+    .join("\n");
+  return {
+    ...(typeof eventId === "string" ? { id: eventId } : {}),
+    source: "acp",
+    thread: typeof meta.thread_id === "string" ? meta.thread_id : `acp:${params.sessionId}`,
+    author: typeof meta.author === "string" ? meta.author : "user",
+    kind: typeof meta.kind === "string" ? meta.kind : "im.message",
+    isBot: meta.is_bot === true,
+    text: text || "(empty)",
+    // A stable event without an external timestamp must remain identical on
+    // retry. receivedAt is only an identity-free submission's default.
+    timestamp: timestamp ?? (eventId === undefined ? receivedAt : 0),
+    replyTo: null,
+  };
 }
 
 /**
@@ -23,6 +211,8 @@ interface UpstreamSession {
  */
 export async function serveUpstream(engine: Engine): Promise<void> {
   const sessions = new Map<string, UpstreamSession>();
+  const deliveries = new AcpDeliveryManager(engine);
+  await deliveries.start();
   process.stdin.resume();
   const stream = acp.ndJsonStream(
     Writable.toWeb(process.stdout) as WritableStream<Uint8Array>,
@@ -49,38 +239,32 @@ export async function serveUpstream(engine: Engine): Promise<void> {
     .onRequest(acp.methods.agent.session.prompt, async ({ params, client, signal }) => {
       const session = sessions.get(params.sessionId);
       if (!session) throw acp.RequestError.sessionNotFound(params.sessionId);
+      const startedAt = Date.now();
+      const input = triggerFromAcpPrompt(params, startedAt);
+      const deliveryIntentId = input.id ?? globalThis.crypto.randomUUID();
+      const target = captureCcTarget();
+      const beforeEvents = await engine.events();
+      const baseline = new Map<string, number>();
+      for (const event of beforeEvents) baseline.set(event.workerId, Math.max(baseline.get(event.workerId) ?? 0, event.seq));
       session.pending?.abort();
       const pending = new AbortController();
       session.pending = pending;
       const onAbort = () => pending.abort();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
-        const text = params.prompt
-          .map((block) => (block.type === "text" ? block.text : ""))
-          .filter(Boolean)
-          .join("\n");
-        const meta = (params._meta ?? {}) as { thread_id?: string; author?: string; kind?: string; is_bot?: boolean };
-        const startedAt = Date.now();
-        const result = await engine.ingest({
-          source: "acp",
-          thread: typeof meta.thread_id === "string" ? meta.thread_id : `acp:${params.sessionId}`,
-          author: typeof meta.author === "string" ? meta.author : "user",
-          kind: typeof meta.kind === "string" ? meta.kind : "im.message",
-          isBot: meta.is_bot === true,
-          text: text || "(empty)",
-          timestamp: startedAt,
-          replyTo: null,
-        });
-        const relay = createWorkerResultRelay(engine, (text) => deliverViaCcConnect(text));
+        const result = await engine.ingest(input);
+        // Persist the route watch before waiting for Worker execution. If the
+        // process dies before turn_end, restart can still claim the eventual
+        // error/result with this prompt's original target.
+        await deliveries.bind(result.deliveredTo, target, baseline, deliveryIntentId);
         await engine.settle();
         if (pending.signal.aborted) {
-          relay.stop();
           return { stopReason: "cancelled" as const };
         }
-        const reply = await formatUpstreamReply(engine, result, startedAt);
-        const pendingWorkers = await workersStillRunning(engine, result, startedAt);
-        if (pendingWorkers.length === 0) relay.stop();
-        else relay.watch(pendingWorkers);
+        const afterEvents = await engine.events();
+        const relevantWorkers = relevantWorkerIds(result, afterEvents, baseline);
+        await deliveries.replay(afterEvents, relevantWorkers, target, baseline, deliveryIntentId, false);
+        const reply = await formatUpstreamReply(engine, result, startedAt, target, baseline);
         await client.notify(acp.methods.client.session.update, {
           sessionId: params.sessionId,
           update: {
@@ -88,14 +272,9 @@ export async function serveUpstream(engine: Engine): Promise<void> {
             content: { type: "text", text: reply },
           },
         });
-        if (pending.signal.aborted) {
-          relay.stop();
-          return { stopReason: "cancelled" as const };
-        }
-        // Release after this handler returns so the prompt RPC can complete
-        // before cc-connect send. Holding the prompt open is not how a second
-        // thread stays responsive.
-        if (pendingWorkers.length > 0) setTimeout(() => relay.release(), 0);
+        // Return the ACP prompt before cc-connect performs its separate send.
+        // Hook-delivered future results are already dispatched asynchronously.
+        setTimeout(() => { void deliveries.outboxPump(); }, 0);
         return { stopReason: "end_turn" as const };
       } finally {
         if (session.pending === pending) session.pending = null;
@@ -120,7 +299,7 @@ export async function serveUpstream(engine: Engine): Promise<void> {
       resolve();
       const force = setTimeout(() => process.exit(0), 500);
       if (typeof force.unref === "function") force.unref();
-      void closeSessions(sessions).finally(() => process.exit(0));
+      void closeSessions(sessions).finally(() => deliveries.stop()).finally(() => process.exit(0));
     };
     process.stdin.once("end", stop);
     process.stdin.once("close", stop);
@@ -139,10 +318,11 @@ export async function formatUpstreamReply(
   result: IngestResult,
   startedAt: number,
   env: NodeJS.ProcessEnv = process.env,
+  baseline?: Map<string, number>,
 ): Promise<string> {
   if (result.action === "ignore") return "Ignored by the admission rules.";
   const events = await engine.events();
-  const end = [...events].reverse().find((event) => event.type === "coordinator.turn_end");
+  const end = [...events].reverse().find((event) => event.type === "coordinator.turn_end" && event.seq > (baseline?.get(event.workerId) ?? -1));
   let text: string;
   if (end?.payload.stopReason === "error") {
     text = `Router failed: ${String(end.payload.message ?? "unknown error")}`;
@@ -153,12 +333,11 @@ export async function formatUpstreamReply(
   } else {
     text = `Delivered to ${result.deliveredTo.length} worker(s).`;
   }
-  const workers = (await engine.workers()).filter((worker) => worker.createdAt >= startedAt - 50);
-  const ids = [...new Set([...result.deliveredTo, ...workers.map((worker) => worker.id)])];
+  const ids = relevantWorkerIds(result, events, baseline);
   if (ids.length === 0) return text;
   const notes = ids.map((id) => {
-    const turn = [...events].reverse().find((event) => event.type === "worker.turn_end" && event.workerId === id);
-    const failure = [...events].reverse().find((event) => event.type === "worker.error" && event.workerId === id);
+    const turn = [...events].reverse().find((event) => event.type === "worker.turn_end" && event.workerId === id && event.seq > (baseline?.get(id) ?? -1));
+    const failure = [...events].reverse().find((event) => event.type === "worker.error" && event.workerId === id && event.seq > (baseline?.get(id) ?? -1));
     if (turn) return `Worker ${id} finished: ${workerNote(turn.payload)}`;
     if (failure) return `Worker ${id} failed: ${workerNote(failure.payload)}`;
     const plan = planCcConnectDelivery(env);
@@ -170,17 +349,13 @@ export async function formatUpstreamReply(
   return [text, ...notes].join("\n");
 }
 
-async function workersStillRunning(engine: Engine, result: IngestResult, startedAt: number): Promise<string[]> {
-  const events = await engine.events();
-  const workers = (await engine.workers()).filter((worker) => worker.createdAt >= startedAt - 50);
-  const ids = [...new Set([...result.deliveredTo, ...workers.map((worker) => worker.id)])];
-  return ids.filter((id) => {
-    const done = events.some(
-      (event) =>
-        (event.type === "worker.turn_end" || event.type === "worker.error") && event.workerId === id,
-    );
-    return !done;
-  });
+function relevantWorkerIds(result: IngestResult, events: Awaited<ReturnType<Engine["events"]>>, baseline?: Map<string, number>): string[] {
+  const ids = new Set(result.deliveredTo);
+  for (const event of events) {
+    if (event.type !== "worker.spawned") continue;
+    if (event.seq > (baseline?.get(event.workerId) ?? -1)) ids.add(event.workerId);
+  }
+  return [...ids];
 }
 
 function workerNote(payload: Record<string, unknown>): string {

@@ -6,7 +6,7 @@ import { main } from "../../src/cli.js";
 import { SystemClock } from "../../src/clock.js";
 import { defaultConfig, saveConfig } from "../../src/config.js";
 import { Engine } from "../../src/engine.js";
-import { ProcessRuntimeFactory } from "../../src/runtime.js";
+import { buildWorkerEnvironment, ProcessRuntimeFactory } from "../../src/runtime.js";
 import { SqliteStore } from "../../src/store.js";
 import type { RuntimeConfig } from "../../src/types.js";
 import { waitForEvent } from "../harness/stdio-engine.js";
@@ -84,6 +84,58 @@ async function removeTree(dir: string): Promise<void> {
 }
 
 describe("claude-code and codex profiles", () => {
+  it("reports a missing local runtime command instead of crashing the host", async () => {
+    const factory = new ProcessRuntimeFactory({ handshakeTimeoutMs: 200 });
+    await expect(factory.launch({
+      name: "missing-runtime",
+      command: path.join(tmpdir(), "tigercat-command-does-not-exist"),
+      args: [],
+      env: {},
+      tags: [],
+      description: "missing command",
+      permission: "deny",
+    }, {
+      cwd: process.cwd(),
+      role: "worker",
+      onUpdate: () => undefined,
+      onPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+    })).rejects.toMatchObject({ code: "bad_runtime" });
+  });
+
+  it("keeps host/channel secrets out of inherited Worker env", () => {
+    const env = buildWorkerEnvironment({ RUNTIME_SECRET: "explicit-runtime-secret" }, {
+      PATH: "/bin",
+      ANTHROPIC_API_KEY: "worker-key",
+      OPENAI_API_KEY: "worker-openai-key",
+      DEEPSEEK_API_KEY: "router-key",
+      TIGERCAT_PLUGIN_DB: "/private/state.sqlite",
+      tigercat_plugin_db: "/private/lowercase-state.sqlite",
+      TIGERCAT_IPC_TOKEN: "router-ipc-token",
+      TIGERCAT_LARK_PROFILE_REF: "profile-secret",
+      CC_SESSION_KEY: "upstream-session-token",
+      HOME: "/home/test",
+    }, "claude-code");
+    expect(env.ANTHROPIC_API_KEY).toBe("worker-key");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.DEEPSEEK_API_KEY).toBeUndefined();
+    expect(env.TIGERCAT_PLUGIN_DB).toBeUndefined();
+    expect(env.tigercat_plugin_db).toBeUndefined();
+    expect(env.TIGERCAT_IPC_TOKEN).toBeUndefined();
+    expect(env.TIGERCAT_LARK_PROFILE_REF).toBeUndefined();
+    expect(env.CC_SESSION_KEY).toBeUndefined();
+    expect(env.RUNTIME_SECRET).toBe("explicit-runtime-secret");
+    expect(env.HOME).toBe("/home/test");
+
+    const codex = buildWorkerEnvironment({}, {
+      ANTHROPIC_API_KEY: "claude-key",
+      CODEX_API_KEY: "codex-key",
+      OPENAI_API_KEY: "openai-key",
+    }, "codex");
+    expect(codex.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(codex.CODEX_API_KEY).toBe("codex-key");
+    expect(codex.OPENAI_API_KEY).toBe("openai-key");
+  });
+
   it("sends the same prompt to both stub-backed profiles and reads the result", async () => {
     const prompt = "task: add a --json flag to tigercat list";
     const harness = await startProfiles([profile("claude-code"), profile("codex")]);

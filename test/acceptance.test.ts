@@ -29,6 +29,7 @@ describe("week-1 gates", () => {
   it("router tool list contains no shell or edit tools", () => {
     expect([...ROUTER_TOOL_NAMES]).toEqual([
       "spawn",
+      "resume",
       "list",
       "send",
       "read",

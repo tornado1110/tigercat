@@ -89,6 +89,8 @@ export interface ListedRuntime {
   adapter?: { package: string; version: string; bin: string };
   vendorBinary?: string;
   vendorFound?: boolean;
+  /** Absolute executable discovered from an explicit override or PATH. */
+  vendorPath?: string;
   testMode?: "dry-run" | "adapter";
   manual?: string;
 }
@@ -138,6 +140,7 @@ export function listRuntimes(config: AppConfig, env: NodeJS.ProcessEnv = process
       adapter: adapterInfo(spec),
       vendorBinary: spec.vendorBinary,
       vendorFound: vendor.found,
+      vendorPath: vendor.path,
       testMode: adapterTestRequested(spec, env, vendor) ? "adapter" : "dry-run",
       manual: spec.manual,
     });
@@ -156,6 +159,15 @@ export function listRuntimes(config: AppConfig, env: NodeJS.ProcessEnv = process
     });
   }
   return [...listed.values()];
+}
+
+/**
+ * Probe the host for the built-in Claude Code and Codex vendor executables.
+ * The result intentionally reuses the runtime catalog so callers can show
+ * both configured overrides and the discovered local adapters in one view.
+ */
+export function discoverRuntimes(config: AppConfig, env: NodeJS.ProcessEnv = process.env): ListedRuntime[] {
+  return listRuntimes(config, env);
 }
 
 export function planRuntimeTest(
@@ -318,7 +330,11 @@ function findVendor(spec: AdapterSpec, env: NodeJS.ProcessEnv): VendorProbe {
 
 function resolveExecutable(value: string, env: NodeJS.ProcessEnv): string | undefined {
   if (value.includes("/") || value.includes("\\")) {
-    return isFile(value) ? value : undefined;
+    // Resolve relative explicit paths against the discovery process. The
+    // runtime Worker may use a different cwd, so passing `./claude` through
+    // unchanged would make an otherwise valid discovery fail at launch.
+    const candidate = path.resolve(value);
+    return isExecutableFile(candidate) ? candidate : undefined;
   }
   return findOnPath(value, env);
 }
@@ -329,11 +345,27 @@ function findOnPath(bin: string, env: NodeJS.ProcessEnv): string | undefined {
   for (const dir of raw.split(path.delimiter)) {
     if (!dir) continue;
     for (const ext of exts) {
-      const candidate = path.join(dir, bin + ext);
-      if (isFile(candidate)) return candidate;
+      // PATH entries may themselves be relative. Return an absolute path so
+      // the adapter keeps referring to the discovered binary after its cwd
+      // changes to a Worker worktree.
+      const candidate = path.resolve(dir, bin + ext);
+      if (isExecutableFile(candidate)) return candidate;
     }
   }
   return undefined;
+}
+
+function isExecutableFile(file: string): boolean {
+  try {
+    const stat = statSync(file);
+    if (!stat.isFile()) return false;
+    // Windows uses executable extensions and does not expose meaningful POSIX
+    // mode bits. On POSIX, avoid reporting a non-executable file as a found
+    // vendor binary; otherwise launch fails later with an opaque EACCES.
+    return process.platform === "win32" || (stat.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 function isFile(file: string): boolean {

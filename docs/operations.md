@@ -42,16 +42,18 @@ tigercat acp --config /path/to/config.toml
 
 `runtime list` 打印名字、command、args、permission，以及这一行是不是内置的。它不打印环境变量的值。
 
+`runtime discover` 使用当前宿主的 `PATH` 和显式 `TIGERCAT_CLAUDE_BIN`、`TIGERCAT_CODEX_BIN`/`CODEX_PATH` 覆盖来探测本地厂商二进制。它只把存在且可执行的文件标为已发现，并显示绝对路径；不会运行二进制、联网或读取 API key。`runtime test` 仍然是实际握手的入口。
+
 ## 凭据
 
-`router.provider = "deepseek"` 时，`tigercat acp` 读取 `DEEPSEEK_API_KEY`（或配置里的那个环境变量名），变量缺失就在任何请求之前退出。这次调用没有做过实机测试。Worker 的凭据仍然是子进程本来就有的那些。
+`router.provider = "deepseek"` 时，`tigercat acp` 读取 `DEEPSEEK_API_KEY`（或配置里的那个环境变量名），变量缺失就在任何请求之前退出。这次调用没有做过实机测试。Worker 的凭据来自文档列出的厂商变量，或具体 runtime 的显式 `env` 表。
 
-子进程的环境是父进程环境，加上该 runtime 的 `env` 表。启动 `tigercat acp` 的 shell 里导出的变量，Router 进程和每个 Worker 都能看见。一条 `env` 给那个 runtime 增加一个变量，不会去掉从父进程继承的变量。没有按 runtime 隔离的密钥沙箱。这种隔离没有用真实进程验证过。
+Worker 不会原样继承宿主环境。TigerCat 会移除 Router、插件、飞书、cc-connect 的配置路径和令牌，以及继承来的密钥形状变量；明确支持的厂商凭据（`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CODEX_API_KEY`、`OPENAI_API_KEY` 和对应的二进制路径）仍可供内置 Worker 使用。runtime 自己的 `env` 表在过滤之后合并，因此只应把确实需要的变量显式写入该 runtime；它会以明文保存到 `config.toml`。Worker 不能通过继承环境读取 Router 的 `DEEPSEEK_API_KEY` 或 cc-connect 的 `CC_SESSION_KEY`。
 
 三套凭据要分开：
 
 1. **Router。** `router.provider = "deepseek"` 用 `DEEPSEEK_API_KEY` 里的密钥调用 DeepSeek Chat Completions。这条路径没有做过实机测试。不要把密钥放进 `config.toml`。不写 `router.provider` 就继续用脚本化 brain，它不会调用模型。ACP coordinator 仍然是你另外安装的程序，用 `coordinator_runtime` 点它的名字。不要同时设置 `router.provider` 和 `coordinator_runtime`。
-2. **Worker（`claude-code`、`codex`）。** 两者都内置，权限是 `ask`。Claude Code 使用已有的 `claude` 登录，或 `ANTHROPIC_API_KEY`。Codex 使用 `CODEX_API_KEY` 或 `OPENAI_API_KEY`。这些是厂商程序自己的变量，TigerCat 不解析它们。`TIGERCAT_CLAUDE_BIN` 会作为 `CLAUDE_CODE_EXECUTABLE` 往下传。`TIGERCAT_CODEX_BIN` 会作为 `CODEX_PATH` 往下传。要让 Router 的密钥不进 Worker，就不要在父进程环境里导出它。优先用各产品自己的登录文件，而不是把密钥写进 `runtime add --env`。
+2. **Worker（`claude-code`、`codex`）。** 两者都内置，权限是 `ask`。Claude Code 使用已有的 `claude` 登录，或 `ANTHROPIC_API_KEY`。Codex 使用 `CODEX_API_KEY` 或 `OPENAI_API_KEY`。这些是厂商程序自己的变量，TigerCat 不解析它们。`TIGERCAT_CLAUDE_BIN` 会作为 `CLAUDE_CODE_EXECUTABLE` 往下传。`TIGERCAT_CODEX_BIN` 会作为 `CODEX_PATH` 往下传。Worker 的继承环境会经过过滤；其他密钥请通过具体 runtime 的 `env` 显式传递，并注意它会明文写入配置。优先用各产品自己的登录文件。
 3. **cc-connect 和飞书。** 频道归宿主。TigerCat 的注册只有：
 
    ```toml
