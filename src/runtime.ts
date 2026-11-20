@@ -498,8 +498,11 @@ if ($root -le 0) { exit 2 }
 $deadline = (Get-Date).AddSeconds(12)
 $seen = New-Object 'System.Collections.Generic.HashSet[int]'
 $stable = 0
+[Console]::Error.WriteLine('TigerCat: PowerShell started')
 function Get-Kids([int[]]$roots) {
+  [Console]::Error.WriteLine('TigerCat: enumerating processes')
   $procs = @(Get-CimInstance Win32_Process)
+  [Console]::Error.WriteLine('TigerCat: enumerated processes')
   $byParent = @{}
   foreach ($p in $procs) {
     $id = 0
@@ -530,8 +533,10 @@ function Get-Kids([int[]]$roots) {
 }
 function Stop-Tree([int]$id) {
   if ($id -le 0) { return }
+  [Console]::Error.WriteLine("TigerCat: stopping process $id")
   $taskkill = Join-Path $env:SystemRoot "System32\\taskkill.exe"
   & $taskkill /PID $id /T /F 1>$null 2>$null | Out-Null
+  [Console]::Error.WriteLine("TigerCat: taskkill returned for $id")
 }
 function Test-Live([int]$id) {
   if ($id -le 0) { return $false }
@@ -591,8 +596,6 @@ function windowsKillEnv(root: number): NodeJS.ProcessEnv {
   return {
     ...process.env,
     SystemRoot: rootDir,
-    windir: process.env.windir || rootDir,
-    ComSpec: process.env.ComSpec || path.join(system32, "cmd.exe"),
     PATH: pathValue,
     Path: pathValue,
     TIGERCAT_KILL_ROOT: String(root),
