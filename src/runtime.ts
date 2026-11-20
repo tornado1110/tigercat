@@ -1,7 +1,6 @@
-import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { Readable, Transform, Writable } from "node:stream";
-import { promisify } from "node:util";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Clock } from "./clock.js";
 import { TigerError } from "./errors.js";
@@ -485,7 +484,6 @@ function killPosix(pid: number, proc: ChildProcess): void {
 
 const WINDOWS_REAP_TIMEOUT_MS = 20_000;
 const WINDOWS_CONFIRM_TIMEOUT_MS = 5_000;
-const execFileAsync = promisify(execFile);
 
 /**
  * Collect descendants while the parent is still alive, then taskkill /T /F.
@@ -500,11 +498,8 @@ if ($root -le 0) { exit 2 }
 $deadline = (Get-Date).AddSeconds(12)
 $seen = New-Object 'System.Collections.Generic.HashSet[int]'
 $stable = 0
-[Console]::Error.WriteLine('TigerCat: PowerShell started')
 function Get-Kids([int[]]$roots) {
-  [Console]::Error.WriteLine('TigerCat: enumerating processes')
   $procs = @(Get-CimInstance Win32_Process)
-  [Console]::Error.WriteLine('TigerCat: enumerated processes')
   $byParent = @{}
   foreach ($p in $procs) {
     $id = 0
@@ -535,10 +530,8 @@ function Get-Kids([int[]]$roots) {
 }
 function Stop-Tree([int]$id) {
   if ($id -le 0) { return }
-  [Console]::Error.WriteLine("TigerCat: stopping process $id")
   $taskkill = Join-Path $env:SystemRoot "System32\\taskkill.exe"
   & $taskkill /PID $id /T /F 1>$null 2>$null | Out-Null
-  [Console]::Error.WriteLine("TigerCat: taskkill returned for $id")
 }
 function Test-Live([int]$id) {
   if ($id -le 0) { return $false }
@@ -589,9 +582,10 @@ function windowsSystemRoot(): string {
 function windowsKillEnv(root: number): NodeJS.ProcessEnv {
   const rootDir = windowsSystemRoot();
   const system32 = path.join(rootDir, "System32");
+  const powershellDir = path.join(system32, "WindowsPowerShell", "v1.0");
   const pathValue = [
     system32,
-    path.join(system32, "WindowsPowerShell", "v1.0"),
+    powershellDir,
     process.env.PATH,
     process.env.Path,
   ].filter((entry): entry is string => Boolean(entry)).join(";");
@@ -600,6 +594,8 @@ function windowsKillEnv(root: number): NodeJS.ProcessEnv {
     SystemRoot: rootDir,
     PATH: pathValue,
     Path: pathValue,
+    // MCP hosts may pass a restricted environment that omits this setting.
+    PSModulePath: process.env.PSModulePath || path.join(powershellDir, "Modules"),
     TIGERCAT_KILL_ROOT: String(root),
   };
 }
@@ -608,16 +604,17 @@ async function reapWindowsTree(root: number): Promise<void> {
   let stdout = "";
   const powershell = path.join(windowsSystemRoot(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   try {
-    ({ stdout } = await execFileAsync(
+    stdout = execFileSync(
       powershell,
-      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_REAP_SCRIPT, "utf16le").toString("base64")],
+      ["-NoProfile", "-NonInteractive", "-Command", "-"],
       {
+        input: WINDOWS_REAP_SCRIPT,
         encoding: "utf8",
         windowsHide: true,
         timeout: WINDOWS_REAP_TIMEOUT_MS,
         env: windowsKillEnv(root),
       },
-    ));
+    );
   } catch (error) {
     const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr ?? "") : "";
     const message = error instanceof Error ? error.message : String(error);
