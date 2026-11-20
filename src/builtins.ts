@@ -360,9 +360,12 @@ function isExecutableFile(file: string): boolean {
     const stat = statSync(file);
     if (!stat.isFile()) return false;
     // Windows uses executable extensions and does not expose meaningful POSIX
-    // mode bits. On POSIX, avoid reporting a non-executable file as a found
-    // vendor binary; otherwise launch fails later with an opaque EACCES.
-    return process.platform === "win32" || (stat.mode & 0o111) !== 0;
+    // mode bits. Require one of the extensions CreateProcess can launch;
+    // otherwise a regular PATH file is not a vendor binary. On POSIX, avoid
+    // reporting a non-executable file as found, or launch fails later with EACCES.
+    return process.platform === "win32"
+      ? /\.(?:exe|cmd|bat|com)$/i.test(file)
+      : (stat.mode & 0o111) !== 0;
   } catch {
     return false;
   }

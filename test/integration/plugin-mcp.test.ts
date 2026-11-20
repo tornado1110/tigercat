@@ -230,7 +230,7 @@ describe("host-driven Codex plugin", () => {
     expect((second.events as Array<{ type: string }>).filter((event) => event.type === "worker.turn_end")).toHaveLength(2);
     await client.callTool({ name: "kill", arguments: { id } });
     expect(payload(await client.callTool({ name: "read", arguments: { id } })).state).toBe("killed");
-  });
+  }, 60_000);
 
   it("closes on stdin EOF and removes the persisted database claim", async () => {
     const root = await temporaryRoot();

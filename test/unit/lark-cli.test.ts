@@ -10,7 +10,7 @@ function binding(name: string, revision = "rev-1"): LarkCliBinding {
   return {
     accountRef: `app-${name}`,
     profileRef: `profile-${name}`,
-    credentialHome: path.join("/tmp", `tigercat-lark-${name}`),
+    credentialHome: path.join(tmpdir(), `tigercat-lark-${name}`),
     credentialRevision: revision,
   };
 }
@@ -40,8 +40,11 @@ describe("LocalLarkCli", () => {
       ["--profile", "profile-one"],
       ["--profile", "profile-two"],
     ]);
-    expect(seen.map((call) => call.env.HOME)).toEqual(["/tmp/tigercat-lark-one", "/tmp/tigercat-lark-two"]);
-    expect(seen[0].env.XDG_CONFIG_HOME).toBe("/tmp/tigercat-lark-one/.config");
+    expect(seen.map((call) => call.env.HOME)).toEqual([
+      path.join(tmpdir(), "tigercat-lark-one"),
+      path.join(tmpdir(), "tigercat-lark-two"),
+    ]);
+    expect(seen[0].env.XDG_CONFIG_HOME).toBe(path.join(tmpdir(), "tigercat-lark-one", ".config"));
   });
 
   it("normalizes needs_refresh to a refreshable user status", async () => {
