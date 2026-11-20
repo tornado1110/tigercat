@@ -603,10 +603,10 @@ async function reapWindowsTree(root: number): Promise<void> {
   try {
     stdout = execFileSync(
       powershell,
-      ["-NoProfile", "-NonInteractive", "-Command", "-"],
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_REAP_SCRIPT, "utf16le").toString("base64")],
       {
-        input: WINDOWS_REAP_SCRIPT,
         encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
         timeout: WINDOWS_REAP_TIMEOUT_MS,
         env: windowsKillEnv(root),
