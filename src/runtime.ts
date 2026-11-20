@@ -591,6 +591,8 @@ function windowsKillEnv(root: number): NodeJS.ProcessEnv {
   return {
     ...process.env,
     SystemRoot: rootDir,
+    windir: process.env.windir || rootDir,
+    ComSpec: process.env.ComSpec || path.join(system32, "cmd.exe"),
     PATH: pathValue,
     Path: pathValue,
     TIGERCAT_KILL_ROOT: String(root),
@@ -603,10 +605,10 @@ async function reapWindowsTree(root: number): Promise<void> {
   try {
     stdout = execFileSync(
       powershell,
-      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_REAP_SCRIPT, "utf16le").toString("base64")],
+      ["-NoProfile", "-NonInteractive", "-Command", "-"],
       {
+        input: WINDOWS_REAP_SCRIPT,
         encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
         timeout: WINDOWS_REAP_TIMEOUT_MS,
         env: windowsKillEnv(root),
