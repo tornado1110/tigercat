@@ -594,8 +594,9 @@ function windowsKillEnv(root: number): NodeJS.ProcessEnv {
     SystemRoot: rootDir,
     PATH: pathValue,
     Path: pathValue,
-    // MCP hosts may pass a restricted environment that omits this setting.
-    PSModulePath: process.env.PSModulePath || path.join(powershellDir, "Modules"),
+    // With no inherited module path, avoid the default user and registry
+    // paths. PowerShell locates its built-in modules under PSHOME itself.
+    PSModulePath: process.env.PSModulePath || powershellDir,
     TIGERCAT_KILL_ROOT: String(root),
   };
 }
