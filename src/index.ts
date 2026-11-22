@@ -43,5 +43,7 @@ export type {
 } from "./lark-cli.js";
 export { LocalLarkTransport, MockLarkTransport, validateLarkApiRequest } from "./lark-transport.js";
 export type { LarkTransport, LarkApiRequest, LarkApiMethod, LarkApiPrimitive, LarkMockCall, LarkMockFixtures } from "./lark-transport.js";
+export { PersonalAssistant, personalAssistantMarkdown } from "./personal-assistant.js";
+export type { DraftCandidate, TrackedDraft, DraftChange, PersonalScanResult, PersonalAssistantOptions, DraftTrackingStatus } from "./personal-assistant.js";
 export { assertNoShellOrEditTools, ROUTER_TOOL_NAMES, WORKER_TOOL_NAMES } from "./tools.js";
 export type { AppConfig, TriggerInput, SpawnRequest } from "./types.js";
