@@ -1,6 +1,16 @@
 # IM 渠道
 
-## 启动飞书
+## 一键接入
+
+在项目目录运行 `tigercat feishu connect`。从源码运行时，先执行 `npm ci` 和 `npm run build`，再运行 `node dist/cli.js feishu connect`。
+
+1. 打开终端显示的飞书官方授权链接，登录并确认创建机器人。页面会预填应用名、消息权限和订阅事件。
+2. 出现 `Feishu WebSocket connected.` 后，打开终端里的机器人私聊链接。默认允许创建者发消息，群聊可以通过下表的群白名单启用。
+3. 保持渠道进程运行。下次用相同的 TigerCat 配置启动会复用绑定。应用凭据保存在用户目录下的 `~/.tigercat/bindings/feishu.sqlite`。如果飞书没有返回创建者身份，可通过 `TIGERCAT_FEISHU_ALLOWED_USERS` 显式指定。
+
+`--cwd` 指定仓库，`--runtime` 指定 Worker。首次接入时优先使用已配置的默认 Worker，否则自动发现本机的 Codex 或 Claude Code，优先使用 Codex。飞书文本渠道对需要交互确认的权限请求采用 deny。已明确配置的 auto 策略继续生效。
+
+## 使用已有的飞书应用
 
 1. 在飞书开放平台创建企业自建应用，启用机器人。添加接收消息事件 `im.message.receive_v1`，订阅方式选长连接。给应用授予接收私聊、群内 @ 消息、以应用身份发送消息和管理消息表情回复（`im:message.reactions:write_only`）的权限。发布应用并将机器人加入要接入的群。
 2. 为渠道配置一个 Worker 运行时。文本渠道使用 `permission = "deny"`，或使用你已明确配置为 `auto` 的运行时。内置运行时默认使用 `ask`。可通过 `tigercat runtime add <name> --command <ACP adapter> --permission deny` 注册运行时。
@@ -34,5 +44,5 @@ tigercat feishu --cwd /absolute/path/to/repo --runtime feishu-worker
 
 - `connect` 管理 SDK 连接，验证渠道身份与访问规则，再把入站事件转换为 `ImMessage`。消息 ID 对提供方重投必须稳定，会话标识要包含足够的租户、群或话题信息。
 - 适配器可实现 `liveTurns.joined` 来启用轮中补充。公共层负责 ACP 能力协商后的提交、启动期间的短时重试和结果归属。适配器在补充消息上显示已加入状态，并返回结束时更新状态的回调。
-- `replyTarget` 保存回复所需的地址，例如原消息 ID。它会持久化，凭据放在适配器的进程环境里。
+- `replyTarget` 保存回复所需的地址，例如原消息 ID。它会持久化，凭据由适配器从本机绑定或进程环境中读取。
 - `transport.send` 实现提供方回复。收到成功确认时返回 `delivered`。可以证明未发送时返回 `not_sent`，由公共队列做有上限的重试。结果未知时返回 `unknown`，队列保留该状态等待核对。支持消息幂等键的提供方可以从 `eventId` 派生键。

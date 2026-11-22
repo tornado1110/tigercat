@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { configPath } from "./config.js";
+import { bindingFile, loadOrRegisterFeishu } from "./feishu-binding.js";
 import type { EventHandles, Logger } from "@larksuiteoapi/node-sdk";
 import { TigerError } from "./errors.js";
 import { serveImChannel, type ImChannelHostOptions, type ImMessage } from "./im-channel.js";
@@ -55,21 +59,44 @@ function idSet(value: string | undefined): Set<string> {
 }
 
 export async function serveFeishu(options: ImChannelHostOptions): Promise<void> {
-  const appId = process.env.TIGERCAT_FEISHU_APP_ID?.trim();
-  const appSecret = process.env.TIGERCAT_FEISHU_APP_SECRET?.trim();
-  const botOpenId = process.env.TIGERCAT_FEISHU_BOT_OPEN_ID?.trim();
+  let appId = process.env.TIGERCAT_FEISHU_APP_ID?.trim();
+  let appSecret = process.env.TIGERCAT_FEISHU_APP_SECRET?.trim();
+  let botOpenId = process.env.TIGERCAT_FEISHU_BOT_OPEN_ID?.trim();
   const users = idSet(process.env.TIGERCAT_FEISHU_ALLOWED_USERS);
   const groups = idSet(process.env.TIGERCAT_FEISHU_ALLOWED_CHATS);
-  if (!appId || !/^[a-z0-9_]+$/i.test(appId) || !appSecret || !botOpenId || users.size === 0) {
-    throw new TigerError("invalid_args", "Feishu requires TIGERCAT_FEISHU_APP_ID, TIGERCAT_FEISHU_APP_SECRET, TIGERCAT_FEISHU_BOT_OPEN_ID and TIGERCAT_FEISHU_ALLOWED_USERS");
-  }
-
-  const { Client, EventDispatcher, WSClient, defaultHttpInstance } = await import("@larksuiteoapi/node-sdk");
+  const { Client, Domain, EventDispatcher, WSClient, defaultHttpInstance, registerApp } = await import("@larksuiteoapi/node-sdk");
   defaultHttpInstance.defaults.timeout = 15_000;
-  const credentials = { appId, appSecret, logger: sdkLogger };
+  let domain = Domain.Feishu;
+  const managed = !appId && !appSecret && !botOpenId;
+  if (managed) {
+    const profile = path.resolve(configPath(options.configFile));
+    const binding = await loadOrRegisterFeishu(bindingFile(), profile, registerApp, options.report);
+    appId = binding.appId;
+    appSecret = binding.appSecret;
+    if (binding.owner) users.add(binding.owner);
+    domain = binding.brand === "lark" ? Domain.Lark : Domain.Feishu;
+  }
+  if (!appId || !/^[a-z0-9_]+$/i.test(appId) || !appSecret || (!managed && !botOpenId) || users.size === 0) {
+    throw new TigerError("invalid_args", managed
+      ? "飞书未返回创建者 Open ID。请将你在此应用的 Open ID 配置到 TIGERCAT_FEISHU_ALLOWED_USERS，再运行 tigercat feishu connect 复用已保存的应用。"
+      : "Feishu requires TIGERCAT_FEISHU_APP_ID, TIGERCAT_FEISHU_APP_SECRET, TIGERCAT_FEISHU_BOT_OPEN_ID and TIGERCAT_FEISHU_ALLOWED_USERS");
+  }
+  const credentials = { appId, appSecret, domain, logger: sdkLogger };
   const client = new Client(credentials);
+  if (!botOpenId) {
+    for (const wait of [0, 2_000, 4_000, 8_000]) {
+      if (wait) await delay(wait);
+      const info = await client.request<{ code: number; bot?: { open_id?: string } }>({ url: "/open-apis/bot/v3/info", method: "GET" }).catch(() => undefined);
+      if (info?.code === 0 && info.bot?.open_id) {
+        botOpenId = info.bot.open_id;
+        break;
+      }
+    }
+    if (!botOpenId) throw new TigerError("feishu_identity", "已保存授权，飞书暂未返回机器人身份。请重新运行 tigercat feishu connect。");
+  }
   const access = { botOpenId, users, groups };
   await serveImChannel(options, {
+    localWorkerDefault: managed,
     source: `feishu:${appId}`,
     databaseName: `feishu-${appId}.sqlite`,
     secrets: { TIGERCAT_FEISHU_APP_SECRET: appSecret },
@@ -121,7 +148,10 @@ export async function serveFeishu(options: ImChannelHostOptions): Promise<void> 
           socket = new WSClient({
             ...credentials,
             handshakeTimeoutMs: 15_000,
-            onReady: () => options.report("Feishu WebSocket connected."),
+            onReady: () => {
+              options.report("Feishu WebSocket connected.");
+              if (managed) options.report(`打开机器人私聊：https://applink.${domain === Domain.Lark ? "larksuite.com" : "feishu.cn"}/client/bot/open?appId=${appId}`);
+            },
             onError: () => reject(new TigerError("feishu_connection", "Feishu WebSocket connection failed. Check the bot credentials and event subscription.")),
           });
           const dispatcher = new EventDispatcher({ logger: sdkLogger });

@@ -49,6 +49,8 @@ export interface RuntimeConfig {
   tags: string[];
   description: string;
   permission: PermissionPolicy;
+  /** Name only, resolved from the built-in adapter's user configuration. */
+  providerCredentialEnv?: string;
   /** Pass the args to CreateProcess unchanged. Used for the cmd.exe fallback. */
   windowsVerbatimArguments?: boolean;
 }

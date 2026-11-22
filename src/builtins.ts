@@ -1,5 +1,7 @@
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { homedir } from "node:os";
+import { parse } from "smol-toml";
 import { fileURLToPath } from "node:url";
 import { TigerError } from "./errors.js";
 import type { AppConfig, PermissionPolicy, RuntimeConfig } from "./types.js";
@@ -213,6 +215,25 @@ export function planRuntimeTest(
 }
 
 export function launchConfig(spec: AdapterSpec, env: NodeJS.ProcessEnv): RuntimeConfig {
+  const launch = adapterCommand(spec, env);
+  if (spec.name === "codex") {
+    // Use the user's Codex configuration. A repository's config must never
+    // decide which additional host credentials are inherited by a Worker.
+    const home = env.CODEX_HOME || path.join(homedir(), ".codex");
+    if (path.isAbsolute(home)) {
+      try {
+        const config = parse(readFileSync(path.join(home, "config.toml"), "utf8")) as {
+          model_provider?: string; model_providers?: Record<string, { env_key?: unknown }>;
+        };
+        const key = config.model_providers?.[config.model_provider ?? ""]?.env_key;
+        if (typeof key === "string" && /^[A-Z_][A-Z0-9_]*$/i.test(key) && !/^(?:TIGERCAT_|CC_)/i.test(key)) launch.providerCredentialEnv = key;
+      } catch { /* Codex handles absent or invalid configuration itself. */ }
+    }
+  }
+  return launch;
+}
+
+function adapterCommand(spec: AdapterSpec, env: NodeJS.ProcessEnv): RuntimeConfig {
   const vendor = findVendor(spec, env);
   const childEnv: Record<string, string> = { ...spec.childEnv };
   if (vendor.path) childEnv[spec.vendorPassthrough] = vendor.path;

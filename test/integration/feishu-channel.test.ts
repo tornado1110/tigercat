@@ -111,16 +111,18 @@ describe("native Feishu IM channel", () => {
       await Promise.all([channel.receive(first), channel.receive(first), channel.receive(group), channel.receive(second)]);
       const workers = await engine.list();
       expect(workers).toHaveLength(2);
-      const privateWorker = workers.find(({ id }) => sent.get("om_one")?.includes(id))!;
+      const deliveries = await store.listDeliveries();
+      const privateWorker = deliveries.find((d) => d.eventId.endsWith(":om_one"))!.workerId;
       expect(sent.get("om_one")).toContain("done first task");
-      expect(sent.get("om_two")).toContain(`${privateWorker.id} finished: done follow-up`);
+      expect(sent.get("om_two")).toBe("done follow-up");
+      expect(deliveries.find((d) => d.eventId.endsWith(":om_two"))!.workerId).toBe(privateWorker);
       expect(sent.get("om_group")).toContain("done group task");
-      expect(sent.get("om_group")).not.toContain(privateWorker.id);
+      expect(deliveries.find((d) => d.eventId.endsWith(":om_group"))!.workerId).not.toBe(privateWorker);
 
-      await engine.kill(privateWorker.id);
+      await engine.kill(privateWorker);
       await channel.receive(parseFeishuMessage(event("om_three", "replace worker"), access)!);
       expect(sent.get("om_three")).toContain("done replace worker");
-      expect(sent.get("om_three")).not.toContain(privateWorker.id);
+      expect((await store.listDeliveries()).find((d) => d.eventId.endsWith(":om_three"))!.workerId).not.toBe(privateWorker);
       expect((await store.listDeliveries()).map((delivery) => delivery.status)).toEqual(Array(4).fill("delivered"));
 
       const reconnect = new ImChannel(engine, "feishu:test", "stub", {

@@ -77,6 +77,7 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
       return 0;
     }
     if (command === "feishu") {
+      if (positionals.length > 1 && !(positionals.length === 2 && positionals[1] === "connect")) throw new TigerError("usage", "usage: tigercat feishu [connect] [--cwd repo] [--runtime name]");
       const { serveFeishu } = await import("./feishu.js");
       await serveFeishu({
         cwd: path.resolve(typeof values.cwd === "string" ? values.cwd : process.cwd()),
@@ -399,7 +400,7 @@ A Super-agent router for coding agents.
 
 Usage:
   tigercat acp [--config file]
-  tigercat feishu [--cwd repo] [--runtime name] [--config file]
+  tigercat feishu [connect] [--cwd repo] [--runtime name] [--config file]
   tigercat plugin [--config file]  MCP tools for a host-driven Codex plugin
   tigercat runtime add <name> --command <cmd> [--arg a] [--env K=V] [--tag t] [--permission ask|auto|deny]
     --env is written to config.toml in plaintext. Do not put API keys there.
