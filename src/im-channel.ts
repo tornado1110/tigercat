@@ -319,7 +319,7 @@ export async function serveImChannel(options: ImChannelHostOptions, adapter: ImA
 
 async function handlePersonalCommand(assistant: PersonalAssistant, text: string): Promise<string | undefined> {
   const normalized = text.trim().toLowerCase();
-  if (!normalized.includes("稿")) return;
+  if (!normalized.includes("稿") && !/盯|跟踪|刷新/.test(normalized)) return;
   if (/扫描|候选|找/.test(normalized) && !/盯|跟踪|确认/.test(normalized)) {
     return personalAssistantMarkdown(await assistant.scanCandidates());
   }
@@ -345,6 +345,7 @@ async function candidateIds(assistant: PersonalAssistant, text: string): Promise
   const explicit = [...text.matchAll(/(?:docx|wiki):[A-Za-z0-9_-]+/gi)].map((match) => match[0]);
   if (explicit.length) return explicit;
   const candidates = (await assistant.scanCandidates()).candidates;
+  if (/这\s*(?:三|3)\s*篇/.test(text)) return candidates.slice(0, 3).map((candidate) => candidate.id);
   const numbers = [...text.matchAll(/(?:第\s*)?(\d+|[一二三四五六七八九十]+)\s*(?:篇|个)?/g)]
     .map((match) => chineseNumber(match[1]))
     .filter((value): value is number => value !== undefined && value > 0);
