@@ -8,12 +8,15 @@ import { redactText } from "./redact.js";
 import type { RuntimeConfig } from "./types.js";
 
 export interface PromptResult {
+  model?: string;
+  effort?: string;
   stopReason: string;
   text: string;
   awaitingInput: boolean;
 }
 
 export interface RuntimeUpdate {
+  configOptions?: acp.SessionConfigOption[];
   sessionUpdate?: string;
   text?: string;
   toolTitle?: string;
@@ -417,13 +420,23 @@ class ProcessHandle implements RuntimeHandle {
     });
     const textOut = this.updates
       .slice(start)
+      .filter((update) => update.sessionUpdate === "agent_message_chunk")
       .map((update) => update.text ?? "")
       .join("");
     const meta = response._meta ?? undefined;
     const awaiting =
       textOut.includes("[[awaiting-input]]") ||
       (typeof meta === "object" && meta !== null && (meta as { awaitingInput?: unknown }).awaitingInput === true);
+    const info = this.session.newSessionResponse;
+    const options = this.updates.findLast((update) => update.configOptions)?.configOptions ?? info.configOptions ?? [];
+    const option = (category: string) => {
+      const selected = options.find((entry) => entry.category === category && entry.type === "select");
+      return typeof selected?.currentValue === "string" ? selected.currentValue : undefined;
+    };
+    const legacy = (info as { models?: { currentModelId?: string } }).models;
     return {
+      model: option("model") ?? legacy?.currentModelId,
+      effort: option("thought_level"),
       stopReason: response.stopReason,
       text: textOut,
       awaitingInput: awaiting,
@@ -457,6 +470,7 @@ class ProcessHandle implements RuntimeHandle {
 }
 
 function toUpdate(update: acp.SessionUpdate): RuntimeUpdate {
+  if (update.sessionUpdate === "config_option_update") return { sessionUpdate: update.sessionUpdate, configOptions: update.configOptions };
   if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") {
     const content = update.content;
     return {

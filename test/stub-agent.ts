@@ -51,7 +51,7 @@ const connection = acp
     const sessionId = "stub-session";
     sessions.set(sessionId, { pending: null });
     void params;
-    return { sessionId };
+    return { sessionId, configOptions: [{ id: "model", name: "Model", category: "model", type: "select" as const, currentValue: "test-model", options: [{ value: "test-model", name: "Test Model" }] }] };
   })
   .onRequest(acp.methods.agent.session.load, () => {
     throw acp.RequestError.methodNotFound("session/load");

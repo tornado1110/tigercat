@@ -10,7 +10,7 @@ import { Engine } from "./engine.js";
 import { TigerError } from "./errors.js";
 import { ProcessRuntimeFactory } from "./runtime.js";
 import { acceptsSend } from "./state.js";
-import { SqliteStore } from "./store.js";
+import { SqliteStore, type ReplyIdentity } from "./store.js";
 import type { TigerEvent } from "./types.js";
 
 export interface ImMessage {
@@ -45,6 +45,7 @@ export class ImChannel {
     transport: DurableDeliveryTransport,
     private readonly report: (message: string) => void,
     private readonly liveTurns?: ImLiveTurns,
+    private readonly project?: string,
   ) {
     this.outbox = new DurableDeliveryService(engine.store, transport, {
       clock: engine.clock,
@@ -106,7 +107,11 @@ export class ImChannel {
     if (this.abort.signal.aborted) return;
     const store = this.engine.store;
     let workerId = "";
-    const reply = (text: string) => this.deliver(eventId, workerId, message.replyTarget, text);
+    const reply = (text: string, event?: TigerEvent) => this.deliver(eventId, workerId, message.replyTarget, text, {
+      runtime: this.runtime, project: this.project,
+      model: typeof event?.payload.model === "string" ? event.payload.model : undefined,
+      effort: typeof event?.payload.effort === "string" ? event.payload.effort : undefined,
+    });
     try {
       const turn = this.active.get(message.conversation);
       if (turn) {
@@ -136,7 +141,7 @@ export class ImChannel {
       this.active.set(message.conversation, { workerId, result });
       return async () => {
         const event = await result;
-        if (event) await reply(resultText(event));
+        if (event) await reply(resultText(event), event);
         return turnSucceeded(event);
       };
     } catch (error) {
@@ -166,11 +171,11 @@ export class ImChannel {
     return false;
   }
 
-  private async deliver(eventId: string, workerId: string, target: DurableDeliveryTarget, text: string): Promise<void> {
+  private async deliver(eventId: string, workerId: string, target: DurableDeliveryTarget, text: string, identity: ReplyIdentity): Promise<void> {
     // Serialize enqueue-and-pump so an enqueue cannot miss the last
     // in-flight pump's snapshot of pending deliveries.
     const delivery = this.deliveryQueue.then(async () => {
-      await this.outbox.enqueue({ eventId, workerId, text, target });
+      await this.outbox.enqueue({ eventId, workerId, text, target, identity });
       await this.outbox.pump();
     });
     this.deliveryQueue = delivery.catch(() => undefined);
@@ -270,7 +275,7 @@ export async function serveImChannel(options: ImChannelHostOptions, adapter: ImA
     store = SqliteStore.open(db);
     engine = new Engine({ store, clock: new SystemClock(), config, factory: new ProcessRuntimeFactory(), workspaceRoot: options.cwd });
     for (const [name, secret] of Object.entries(adapter.secrets)) engine.noteSecret(name, secret);
-    const active = new ImChannel(engine, adapter.source, runtime, adapter.transport, options.report, adapter.liveTurns);
+    const active = new ImChannel(engine, adapter.source, runtime, adapter.transport, options.report, adapter.liveTurns, path.basename(options.cwd));
     channel = active;
     await engine.start();
     await active.start();
