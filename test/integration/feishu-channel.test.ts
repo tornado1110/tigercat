@@ -64,8 +64,8 @@ describe("native Feishu IM channel", () => {
         return { disposition: "delivered", reason: "accepted" };
       },
     }, (message) => { throw new Error(message); }, {
-      joined: async ({ messageId }) => {
-        statuses.push(`${messageId}:joined`);
+      working: async ({ messageId }) => {
+        statuses.push(`${messageId}:working`);
         return async (ok) => { statuses.push(`${messageId}:${ok}`); };
       },
     });
@@ -75,7 +75,8 @@ describe("native Feishu IM channel", () => {
       const first = parseFeishuMessage(event("one", "original"), access)!;
       const second = parseFeishuMessage(event("two", followup), access)!;
       await Promise.all([channel.receive(first), channel.receive(second), channel.receive(second)]);
-      expect(statuses).toEqual(["two:joined", `two:${ok}`]);
+      expect(statuses.slice(0, 2)).toEqual(["one:working", "two:working"]);
+      expect(statuses.slice(2).sort()).toEqual([`one:${ok}`, `two:${ok}`]);
       expect(replies).toEqual([["one", expect.stringContaining(result)]]);
       expect(await engine.list()).toHaveLength(1);
       expect(await store.listDeliveries()).toHaveLength(1);
@@ -101,7 +102,7 @@ describe("native Feishu IM channel", () => {
         sent.set(target.messageId!, text);
         return { disposition: "delivered", reason: "test accepted it" };
       },
-    }, (message) => { throw new Error(message); }, { joined: async () => { throw new Error("unexpected join"); } });
+    }, (message) => { throw new Error(message); }, { working: async () => async () => {} });
     try {
       await engine.start();
       await channel.start();
