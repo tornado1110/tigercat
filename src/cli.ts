@@ -76,6 +76,16 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
       await servePlugin(typeof values.config === "string" ? values.config : undefined);
       return 0;
     }
+    if (command === "feishu") {
+      const { serveFeishu } = await import("./feishu.js");
+      await serveFeishu({
+        cwd: path.resolve(typeof values.cwd === "string" ? values.cwd : process.cwd()),
+        configFile: typeof values.config === "string" ? values.config : undefined,
+        runtime: typeof values.runtime === "string" ? values.runtime : undefined,
+        report: (message) => io.stderr(`${message}\n`),
+      });
+      return 0;
+    }
     if (command === "acp") {
       return await cmdAcp(typeof values.config === "string" ? values.config : undefined);
     }
@@ -389,6 +399,7 @@ A Super-agent router for coding agents.
 
 Usage:
   tigercat acp [--config file]
+  tigercat feishu [--cwd repo] [--runtime name] [--config file]
   tigercat plugin [--config file]  MCP tools for a host-driven Codex plugin
   tigercat runtime add <name> --command <cmd> [--arg a] [--env K=V] [--tag t] [--permission ask|auto|deny]
     --env is written to config.toml in plaintext. Do not put API keys there.
