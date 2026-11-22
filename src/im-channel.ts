@@ -45,7 +45,7 @@ export class ImChannel {
     transport: DurableDeliveryTransport,
     private readonly report: (message: string) => void,
     private readonly liveTurns?: ImLiveTurns,
-    private readonly project?: string,
+    private readonly workspace?: string,
   ) {
     this.outbox = new DurableDeliveryService(engine.store, transport, {
       clock: engine.clock,
@@ -108,7 +108,7 @@ export class ImChannel {
     const store = this.engine.store;
     let workerId = "";
     const reply = (text: string, event?: TigerEvent) => this.deliver(eventId, workerId, message.replyTarget, text, {
-      runtime: this.runtime, project: this.project,
+      runtime: this.runtime, workspace: this.workspace,
       model: typeof event?.payload.model === "string" ? event.payload.model : undefined,
       effort: typeof event?.payload.effort === "string" ? event.payload.effort : undefined,
     });
