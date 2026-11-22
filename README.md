@@ -2,9 +2,9 @@
 
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
 
-面向编程代理的任务与 Worker 编排工具，可独立运行，也可作为 Codex 插件提供。
+面向编程代理的任务与 Worker 编排工具，可独立运行、接入飞书机器人，也可作为 Codex 插件提供。
 
-TigerCat 有两种交付形态，复用同一个 Engine 和 Worker 协议：独立运行时用 `tigercat acp`；作为 Codex 插件时，由当前 Codex 会话使用 TigerCat 的 MCP 工具调度 Worker，无需另外启动 Router 模型。插件目录为 [`plugins/codex`](plugins/codex/README.md)。
+TigerCat 的入口复用同一个 Engine 和 Worker 协议：独立运行时用 `tigercat acp`；作为 Codex 插件时，由当前 Codex 会话使用 TigerCat 的 MCP 工具调度 Worker，无需另外启动 Router 模型。插件目录为 [`plugins/codex`](plugins/codex/README.md)。飞书机器人可以用 [`tigercat feishu`](#飞书机器人) 直接收发消息。
 
 TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。独立模式对上游提供 ACP agent（`tigercat acp`），供 cc-connect 或 Zed 这样的宿主驱动；插件模式对当前 Codex 会话提供 Skill 和 MCP 工具。两种模式对下游都是 ACP 客户端，在已注册的 runtime 上启动 Worker。飞书和钉钉由可选宿主接入。
 
@@ -41,7 +41,13 @@ Worker 的 `permission = "ask"` 会通过 MCP elicitation 交给当前 Codex 宿
 
 MCP 连接关闭时会清理 Worker。默认每个插件进程有隔离的临时状态；设置 `TIGERCAT_PLUGIN_DB` 可保留历史，同一个数据库只允许一个插件进程占用。重启后旧 Worker 标为中断，不自动重放任务；异常退出遗留的 `.plugin-lock` 需要确认旧进程退出后再移除。当前版本没有自动唤醒 Codex 会话、断线继续执行或持久结果投递的承诺。
 
-飞书渠道和 `lark-cli` 是可选集成，与这两种交付形态独立。DeerFlow 的授权、profile、消息和文件交付细节及尚需实现的接口见 [集成分析](docs/lark-cli-integration.md)；目前还不能称飞书渠道完备。
+`lark-cli` 用于插件中的可选飞书业务操作。原生飞书机器人有独立的进程入口和机器人身份。
+
+## 飞书机器人
+
+`tigercat feishu --cwd /path/to/repo --runtime <已配置的运行时>` 单独启动飞书渠道，通过长连接接收文本并回复原消息。每个进程绑定一个仓库。授权用户可以私聊机器人，也可以在明确授权的群里 @ 机器人。私聊和群话题的后续消息会续用各自的 Worker。
+
+[飞书配置与新增 IM 渠道](docs/im-channels.md)
 
 ## 独立运行时
 
