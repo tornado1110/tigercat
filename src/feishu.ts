@@ -27,9 +27,9 @@ export function parseFeishuMessage(event: MessageEvent, access: FeishuAccess): I
   const user = sender?.sender_id?.open_id;
   if (sender?.sender_type !== "user" || !user || !access.users.has(user)) return;
   if (message?.message_type !== "text" || !message.message_id || !message.chat_id) return;
-  const inThread = message.chat_type === "group";
+  const group = message.chat_type === "group";
   const mentions = (message.mentions ?? []).filter((mention) => mention.id?.open_id === access.botOpenId && mention.key);
-  if (inThread ? !access.groups.has(message.chat_id) || mentions.length === 0 : message.chat_type !== "p2p") return;
+  if (group ? !access.groups.has(message.chat_id) || mentions.length === 0 : message.chat_type !== "p2p") return;
 
   let content: unknown;
   try {
@@ -42,11 +42,10 @@ export function parseFeishuMessage(event: MessageEvent, access: FeishuAccess): I
   for (const mention of mentions) text = text.replaceAll(mention.key, "");
   text = text.trim();
   if (!text) return;
-  const topic = inThread ? message.root_id || message.parent_id || message.thread_id || message.message_id : user;
   return {
     id: message.message_id,
-    conversation: JSON.stringify([message.chat_id, topic]),
-    replyTarget: { messageId: message.message_id, inThread: String(inThread) },
+    conversation: JSON.stringify(group ? [message.chat_id] : [message.chat_id, user]),
+    replyTarget: { messageId: message.message_id, inThread: "false" },
     text,
   };
 }
@@ -74,6 +73,27 @@ export async function serveFeishu(options: ImChannelHostOptions): Promise<void> 
     source: `feishu:${appId}`,
     databaseName: `feishu-${appId}.sqlite`,
     secrets: { TIGERCAT_FEISHU_APP_SECRET: appSecret },
+    liveTurns: {
+      joined: async ({ messageId }) => {
+        const path = { message_id: messageId! };
+        const reactions = client.im.v1.messageReaction;
+        const add = async (emoji: string) => {
+          try {
+            const response = await reactions.create({ path, data: { reaction_type: { emoji_type: emoji } } });
+            if (response.code === 0) return response.data?.reaction_id;
+          } catch { /* SDK errors may contain credentials. */ }
+          options.report("Feishu could not add the message reaction.");
+        };
+        const typing = await add("Typing");
+        return async (success) => {
+          if (typing) {
+            const removed = await reactions.delete({ path: { ...path, reaction_id: typing } }).catch(() => undefined);
+            if (removed?.code !== 0) options.report("Feishu could not remove the typing reaction.");
+          }
+          await add(success ? "DONE" : "CrossMark");
+        };
+      },
+    },
     transport: {
       send: async ({ eventId, target, text }) => {
         const characters = Array.from(text);

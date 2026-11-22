@@ -559,6 +559,13 @@ export class Engine {
     }));
   }
 
+  async steer(id: string, text: string, signal: AbortSignal): Promise<"injected" | "promptRequired" | "unsupported"> {
+    const live = this.live.get(id);
+    if (!live?.handle || !live.busy) return "promptRequired";
+    if (!live.handle.steer) return "unsupported";
+    return live.handle.steer(text, signal);
+  }
+
   async send(id: string, input: string): Promise<{ status: "started" }> {
     requireString(id, "id");
     requireString(input, "input");
