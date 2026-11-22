@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Clock, ClockTimer } from "./clock.js";
 import { SystemClock } from "./clock.js";
-import type { DeliveryRecord, Store } from "./store.js";
+import type { DeliveryRecord, ReplyIdentity, Store } from "./store.js";
 
 export type TransportDisposition = "delivered" | "not_sent" | "unknown";
 
@@ -12,6 +12,7 @@ export interface DurableDeliveryTarget {
 
 export interface DurableDeliveryTransport {
   send(input: {
+    identity?: ReplyIdentity;
     text: string;
     target: DurableDeliveryTarget;
     eventId: string;
@@ -61,6 +62,7 @@ export class DurableDeliveryService {
   }
 
   async enqueue(input: {
+    identity?: ReplyIdentity;
     eventId: string;
     workerId: string;
     text: string;
@@ -76,6 +78,7 @@ export class DurableDeliveryService {
       workerId: input.workerId,
       text: input.text,
       target: input.target,
+      identity: input.identity,
       createdAt: input.createdAt ?? this.clock.now(),
     });
   }
@@ -134,6 +137,7 @@ export class DurableDeliveryService {
       try {
         outcome = await this.transport.send({
           text: row.text,
+          identity: row.identity,
           target: row.target,
           eventId: row.eventId,
           workerId: row.workerId,

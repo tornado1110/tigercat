@@ -7,6 +7,8 @@ import type { EventHandles, Logger } from "@larksuiteoapi/node-sdk";
 import { TigerError } from "./errors.js";
 import { serveImChannel, type ImChannelHostOptions, type ImMessage } from "./im-channel.js";
 
+import type { ReplyIdentity } from "./store.js";
+
 type MessageEvent = Parameters<NonNullable<EventHandles["im.message.receive_v1"]>>[0];
 
 // SDK errors may contain raw request configuration. Report the channel's
@@ -52,6 +54,17 @@ export function parseFeishuMessage(event: MessageEvent, access: FeishuAccess): I
     replyTarget: { messageId: message.message_id, inThread: "false" },
     text,
   };
+}
+
+export function feishuReplyCard(text: string, identity?: ReplyIdentity): string {
+  const elements: object[] = [{ tag: "markdown", content: text }];
+  if (identity) {
+    const runtime = identity.runtime === "codex" ? "Codex" : identity.runtime === "claude-code" ? "Claude Code" : identity.runtime;
+    const labels = [identity.project && `📁 ${identity.project}`, runtime, identity.model, identity.effort]
+      .filter((label): label is string => Boolean(label)).map((label) => label.replace(/\s+/g, " ").trim().slice(0, 80));
+    elements.push({ tag: "div", text: { tag: "plain_text", content: labels.join(" · "), text_size: "notation", text_color: "grey" } });
+  }
+  return JSON.stringify({ schema: "2.0", config: { wide_screen_mode: true }, body: { elements } });
 }
 
 function idSet(value: string | undefined): Set<string> {
@@ -122,18 +135,27 @@ export async function serveFeishu(options: ImChannelHostOptions): Promise<void> 
       },
     },
     transport: {
-      send: async ({ eventId, target, text }) => {
+      send: async ({ eventId, target, text, identity }) => {
         const characters = Array.from(text);
         const body = characters.length > 9_000 ? characters.slice(0, 9_000).join("") + "\n…（结果已截断）" : text;
         const uuid = createHash("sha256").update(eventId).digest("hex").slice(0, 32);
+        const reply = (type: "interactive" | "text", content: string) => client.im.v1.message.reply({
+          path: { message_id: target.messageId! },
+          data: { content, msg_type: type, reply_in_thread: target.inThread === "true", uuid },
+        });
+        // Only a confirmed card rejection can fall back without risking a duplicate.
+        let code: unknown;
         try {
-          const response = await client.im.v1.message.reply({
-            path: { message_id: target.messageId! },
-            data: { content: JSON.stringify({ text: body }), msg_type: "text", reply_in_thread: target.inThread === "true", uuid },
-          });
-          if (response.code === 0) return { disposition: "delivered", reason: "Feishu accepted the reply" };
-        } catch {
-          // A disconnected response cannot prove the bot did not send it.
+          code = (await reply("interactive", feishuReplyCard(body, identity))).code;
+        } catch (error) {
+          code = (error as { response?: { data?: { code?: unknown } } })?.response?.data?.code;
+        }
+        if (code === 0) return { disposition: "delivered", reason: "Feishu accepted the card" };
+        if (typeof code === "number" && code > 0) {
+          try {
+            const fallback = await reply("text", JSON.stringify({ text: body }));
+            if (fallback.code === 0) return { disposition: "delivered", reason: "Feishu accepted the text fallback" };
+          } catch { /* Delivery is unconfirmed. */ }
         }
         return { disposition: "unknown", reason: "Feishu did not confirm the reply" };
       },

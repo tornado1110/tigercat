@@ -35,7 +35,15 @@ export interface IngressReceipt {
 export type DeliveryStatus = "pending" | "retrying" | "inflight" | "delivered" | "failed" | "uncertain";
 
 /** A durable send intent. `target` is trusted process state captured at submit time. */
+export interface ReplyIdentity {
+  runtime: string;
+  model?: string;
+  effort?: string;
+  project?: string;
+}
+
 export interface DeliveryRecord {
+  identity?: ReplyIdentity;
   eventId: string;
   destinationId: string;
   workerId: string;
@@ -99,6 +107,7 @@ export interface Store {
   completeIngress(source: string, externalId: string, fingerprint: string, result: TriggerIngestResult): Promise<void>;
 
   putDelivery(input: {
+    identity?: ReplyIdentity;
     eventId: string;
     destinationId: string;
     workerId: string;
@@ -317,6 +326,7 @@ export class SqliteStore implements Store {
         destination_id TEXT NOT NULL,
         worker_id TEXT NOT NULL,
         text TEXT NOT NULL,
+        identity TEXT,
         target TEXT NOT NULL,
         status TEXT NOT NULL,
         attempts INTEGER NOT NULL DEFAULT 0,
@@ -337,6 +347,9 @@ export class SqliteStore implements Store {
       );
       CREATE INDEX IF NOT EXISTS delivery_bindings_claim ON delivery_bindings(worker_id, baseline_seq, created_at);
     `);
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('deliveries') WHERE name='identity'").get()) {
+      db.exec("ALTER TABLE deliveries ADD COLUMN identity TEXT");
+    }
     migrateDeliveryBindings(db);
     if (!db.prepare("SELECT 1 FROM meta WHERE key = 'ingress_receipts_migrated'").get()) {
       // Existing triggers may already have caused effects. Preserve their
@@ -569,6 +582,7 @@ export class SqliteStore implements Store {
   }
 
   async putDelivery(input: {
+    identity?: ReplyIdentity;
     eventId: string;
     destinationId: string;
     workerId: string;
@@ -577,14 +591,15 @@ export class SqliteStore implements Store {
     createdAt: number;
   }): Promise<DeliveryRecord> {
     this.db.prepare(`
-      INSERT INTO deliveries (event_id, destination_id, worker_id, text, target, status, attempts, next_attempt_at, last_error, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
+      INSERT INTO deliveries (event_id, destination_id, worker_id, text, identity, target, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
       ON CONFLICT(event_id, destination_id) DO NOTHING
     `).run(
       input.eventId,
       input.destinationId,
       input.workerId,
       input.text,
+      input.identity ? JSON.stringify(input.identity) : null,
       JSON.stringify(input.target),
       input.createdAt,
       input.createdAt,
@@ -928,6 +943,7 @@ interface TriggerRow {
 }
 
 interface DeliveryRow {
+  identity: string | null;
   event_id: string;
   destination_id: string;
   worker_id: string;
@@ -984,6 +1000,7 @@ function mapDelivery(row: DeliveryRow): DeliveryRecord {
     destinationId: row.destination_id,
     workerId: row.worker_id,
     text: row.text,
+    ...(row.identity ? { identity: JSON.parse(row.identity) as ReplyIdentity } : {}),
     target,
     status: row.status,
     attempts: row.attempts,

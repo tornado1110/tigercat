@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { SystemClock } from "../../src/clock.js";
 import { defaultConfig } from "../../src/config.js";
 import { Engine } from "../../src/engine.js";
-import { parseFeishuMessage } from "../../src/feishu.js";
+import { feishuReplyCard, parseFeishuMessage } from "../../src/feishu.js";
 import { ImChannel } from "../../src/im-channel.js";
 import { FakeTimeRuntimeFactory, ProcessRuntimeFactory } from "../../src/runtime.js";
 import { SqliteStore } from "../../src/store.js";
@@ -59,7 +59,11 @@ describe("native Feishu IM channel", () => {
     const replies: Array<[string, string]> = [];
     const statuses: string[] = [];
     const channel = new ImChannel(engine, "feishu:test", "stub", {
-      send: async ({ target, text }) => {
+      send: async ({ target, text, identity }) => {
+        expect(identity).toMatchObject({ runtime: "stub", model: "test-model" });
+        const card = JSON.parse(feishuReplyCard(text, identity));
+        expect(card.body.elements[0]).toEqual({ tag: "markdown", content: text });
+        expect(card.body.elements[1].text.content).toBe("stub · test-model");
         replies.push([target.messageId!, text]);
         return { disposition: "delivered", reason: "accepted" };
       },

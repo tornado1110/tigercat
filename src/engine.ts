@@ -927,7 +927,7 @@ export class Engine {
       const session = await this.store.getSession(workerId);
       if (!session || isTerminal(session.state)) return;
       const cancelled = this.interrupting.has(workerId);
-      await this.finishTurn(workerId, cancelled ? "cancelled" : result.stopReason, cancelled ? "" : result.text);
+      await this.finishTurn(workerId, cancelled ? "cancelled" : result.stopReason, cancelled ? "" : result.text, "model" in result ? result.model : undefined, "effort" in result ? result.effort : undefined);
     } catch (error) {
       if (this.closed || live.suppressExit) return;
       const session = await this.store.getSession(workerId);
@@ -1003,7 +1003,7 @@ export class Engine {
     void this.pumpInbox(workerId);
   }
 
-  private async finishTurn(workerId: string, stopReason: string, text: string): Promise<void> {
+  private async finishTurn(workerId: string, stopReason: string, text: string, model?: string, effort?: string): Promise<void> {
     if (this.closed) return;
     const live = this.liveOf(workerId);
     if (live.suppressExit || live.terminalEmitted) return;
@@ -1019,6 +1019,7 @@ export class Engine {
       awaitingInput,
     }, this.config.summaryMaxChars);
     const event = await this.emit("worker.turn_end", workerId, {
+      model, effort,
       stopReason,
       awaitingInput,
       summary,
