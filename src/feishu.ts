@@ -1,9 +1,20 @@
 import { createHash } from "node:crypto";
-import type { EventHandles } from "@larksuiteoapi/node-sdk";
+import type { EventHandles, Logger } from "@larksuiteoapi/node-sdk";
 import { TigerError } from "./errors.js";
 import { serveImChannel, type ImChannelHostOptions, type ImMessage } from "./im-channel.js";
 
 type MessageEvent = Parameters<NonNullable<EventHandles["im.message.receive_v1"]>>[0];
+
+// SDK errors may contain raw request configuration. Report the channel's
+// own connection and delivery status without logging SDK payloads.
+const discardSdkLog = () => undefined;
+const sdkLogger: Logger = {
+  error: discardSdkLog,
+  warn: discardSdkLog,
+  info: discardSdkLog,
+  debug: discardSdkLog,
+  trace: discardSdkLog,
+};
 
 interface FeishuAccess {
   botOpenId: string;
@@ -54,9 +65,9 @@ export async function serveFeishu(options: ImChannelHostOptions): Promise<void> 
     throw new TigerError("invalid_args", "Feishu requires TIGERCAT_FEISHU_APP_ID, TIGERCAT_FEISHU_APP_SECRET, TIGERCAT_FEISHU_BOT_OPEN_ID and TIGERCAT_FEISHU_ALLOWED_USERS");
   }
 
-  const { Client, EventDispatcher, LoggerLevel, WSClient, defaultHttpInstance } = await import("@larksuiteoapi/node-sdk");
+  const { Client, EventDispatcher, WSClient, defaultHttpInstance } = await import("@larksuiteoapi/node-sdk");
   defaultHttpInstance.defaults.timeout = 15_000;
-  const credentials = { appId, appSecret, loggerLevel: LoggerLevel.fatal };
+  const credentials = { appId, appSecret, logger: sdkLogger };
   const client = new Client(credentials);
   const access = { botOpenId, users, groups };
   await serveImChannel(options, {
@@ -93,7 +104,7 @@ export async function serveFeishu(options: ImChannelHostOptions): Promise<void> 
             onReady: () => options.report("Feishu WebSocket connected."),
             onError: () => reject(new TigerError("feishu_connection", "Feishu WebSocket connection failed. Check the bot credentials and event subscription.")),
           });
-          const dispatcher = new EventDispatcher({ loggerLevel: LoggerLevel.fatal });
+          const dispatcher = new EventDispatcher({ logger: sdkLogger });
           dispatcher.register({
             "im.message.receive_v1": (event) => {
               if (signal.aborted || (event.app_id && event.app_id !== appId)) return;
