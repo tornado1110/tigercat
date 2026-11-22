@@ -32,7 +32,7 @@ tigercat feishu --cwd /absolute/path/to/repo --runtime feishu-worker
 
 进程在配置文件旁创建 `feishu-<app-id>.sqlite`，记录收到的消息 ID、Worker 事件和待发送的结果。每个应用数据库只能由一个进程持有。异常退出后若遗留 `.lock`，确认旧进程退出后再删除。
 
-正在执行时，继续在私聊发消息或在群里 @ 机器人，支持 ACP steering 的 Worker 会把补充指令并入同一轮。补充消息显示 Typing，结束时换为 DONE，失败或取消时换为 CrossMark。本轮答案只回复发起消息一次。已结束的会话会用下一条消息开始新一轮。自定义 Worker 未声明 steering 能力时，补充消息在上一轮结束后单独执行并回复。不同会话可并行工作。
+正在执行时，继续在私聊发消息或在群里 @ 机器人，支持 ACP steering 的 Worker 会把补充指令并入同一轮。每条通过授权的消息在接收时显示 Typing，结束时换为 DONE，失败或取消时换为 CrossMark。本轮答案只回复发起消息一次。已结束的会话会用下一条消息开始新一轮。自定义 Worker 未声明 steering 能力时，补充消息在上一轮结束后单独执行并回复。不同会话可并行工作。
 
 进程重启后，下条新消息会创建 Worker，旧工作区保留。已接收但被重启打断的任务需用一条新消息提交。第一版支持文本来回，附件与交互卡片需单独接入。
 
@@ -43,6 +43,6 @@ tigercat feishu --cwd /absolute/path/to/repo --runtime feishu-worker
 参考 `src/feishu.ts`，新适配器实现以下边界：
 
 - `connect` 管理 SDK 连接，验证渠道身份与访问规则，再把入站事件转换为 `ImMessage`。消息 ID 对提供方重投必须稳定，会话标识要包含足够的租户、群或话题信息。
-- 适配器可实现 `liveTurns.joined` 来启用轮中补充。公共层负责 ACP 能力协商后的提交、启动期间的短时重试和结果归属。适配器在补充消息上显示已加入状态，并返回结束时更新状态的回调。
+- 适配器可实现 `liveTurns.working` 来启用轮中补充。公共层负责 ACP 能力协商后的提交、启动期间的短时重试和结果归属。适配器在每条已受理消息上显示处理状态，并返回结束时更新状态的回调。
 - `replyTarget` 保存回复所需的地址，例如原消息 ID。它会持久化，凭据由适配器从本机绑定或进程环境中读取。
 - `transport.send` 实现提供方回复。收到成功确认时返回 `delivered`。可以证明未发送时返回 `not_sent`，由公共队列做有上限的重试。结果未知时返回 `unknown`，队列保留该状态等待核对。支持消息幂等键的提供方可以从 `eventId` 派生键。

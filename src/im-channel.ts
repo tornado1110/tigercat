@@ -27,7 +27,7 @@ interface ActiveTurn {
 }
 
 interface ImLiveTurns {
-  joined(target: DurableDeliveryTarget): Promise<(success: boolean) => Promise<void>>;
+  working(target: DurableDeliveryTarget): Promise<(success: boolean) => Promise<void>>;
 }
 
 export class ImChannel {
@@ -63,14 +63,35 @@ export class ImChannel {
     const key = message.conversation;
     // Only admission is ordered. Each message observes its own turn outside this lock.
     const previous = this.admissions.get(key) ?? Promise.resolve();
-    const admitted = previous.then(() => this.admit(message));
+    let finish: Promise<((success: boolean) => Promise<void>) | undefined> | undefined;
+    const receipt = this.engine.store.claimIngress({
+      source: this.source,
+      externalId: message.id,
+      fingerprint: createHash("sha256").update(JSON.stringify(message)).digest("hex"),
+      triggerId: `${this.source}:${message.id}`,
+      createdAt: this.engine.clock.now(),
+    }).then(({ claimed, receipt }) => {
+      if (!claimed) return;
+      // Start the receipt immediately, even if admission or Worker startup takes time.
+      // The provider's reaction API must not hold up execution.
+      finish = this.liveTurns?.working(message.replyTarget).catch(() => {
+        this.report("IM 处理状态更新失败。");
+        return undefined;
+      });
+      return receipt.triggerId;
+    });
+    const admitted = Promise.all([previous, receipt]).then(([, id]) => id ? this.admit(message, id) : undefined);
     const release = admitted.then(() => {}, () => {}).finally(() => {
       if (this.admissions.get(key) === release) this.admissions.delete(key);
     });
     this.admissions.set(key, release);
     const task = admitted.then((deliver) => deliver?.()).catch(() => {
       this.report("IM 消息处理失败，请检查 TigerCat 状态。");
-    }).finally(() => this.pending.delete(task));
+      return false;
+    }).then(async (success) => {
+      const update = await finish;
+      await update?.(success === true);
+    }).catch(() => this.report("IM 处理状态更新失败。")).finally(() => this.pending.delete(task));
     this.pending.add(task);
     return task;
   }
@@ -81,33 +102,17 @@ export class ImChannel {
     await this.outbox.stop();
   }
 
-  private async admit(message: ImMessage): Promise<(() => Promise<void>) | undefined> {
+  private async admit(message: ImMessage, eventId: string): Promise<(() => Promise<boolean>) | undefined> {
     if (this.abort.signal.aborted) return;
     const store = this.engine.store;
-    // Claim before dispatching so duplicate provider messages never execute
-    // the work twice, including after a process restart.
-    const receipt = await store.claimIngress({
-      source: this.source,
-      externalId: message.id,
-      fingerprint: createHash("sha256").update(JSON.stringify(message)).digest("hex"),
-      triggerId: `${this.source}:${message.id}`,
-      createdAt: this.engine.clock.now(),
-    });
-    if (!receipt.claimed) return;
-
     let workerId = "";
-    const reply = (text: string) => this.deliver(receipt.receipt.triggerId, workerId, message.replyTarget, text);
+    const reply = (text: string) => this.deliver(eventId, workerId, message.replyTarget, text);
     try {
       const turn = this.active.get(message.conversation);
       if (turn) {
         workerId = turn.workerId;
         if (this.liveTurns && await this.joinTurn(message, turn)) {
-          const status = this.liveTurns;
-          return async () => {
-            const finish = await status.joined(message.replyTarget);
-            const event = await turn.result;
-            await finish(event?.type === "worker.turn_end" && event.payload.stopReason !== "cancelled");
-          };
+          return async () => turnSucceeded(await turn.result);
         }
         await turn.result;
         if (this.abort.signal.aborted) return;
@@ -132,13 +137,17 @@ export class ImChannel {
       return async () => {
         const event = await result;
         if (event) await reply(resultText(event));
+        return turnSucceeded(event);
       };
     } catch (error) {
       if (this.abort.signal.aborted) return;
       const text = error instanceof TigerError && error.code === "max_concurrency"
         ? "Worker 已满，请稍后重新发消息。"
         : "TigerCat 未能确认这条消息的处理状态，请检查本地 Worker。";
-      return () => reply(text);
+      return async () => {
+        await reply(text);
+        return false;
+      };
     }
   }
 
@@ -189,6 +198,10 @@ export class ImChannel {
       signal.removeEventListener("abort", onAbort);
     }
   }
+}
+
+function turnSucceeded(event: TigerEvent | undefined): boolean {
+  return event?.type === "worker.turn_end" && event.payload.stopReason === "end_turn";
 }
 
 function resultText(event: TigerEvent): string {

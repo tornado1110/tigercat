@@ -101,7 +101,7 @@ export async function serveFeishu(options: ImChannelHostOptions): Promise<void> 
     databaseName: `feishu-${appId}.sqlite`,
     secrets: { TIGERCAT_FEISHU_APP_SECRET: appSecret },
     liveTurns: {
-      joined: async ({ messageId }) => {
+      working: async ({ messageId }) => {
         const path = { message_id: messageId! };
         const reactions = client.im.v1.messageReaction;
         const add = async (emoji: string) => {
