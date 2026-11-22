@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, open, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { resolveRuntime } from "./builtins.js";
+import { discoverRuntimes, resolveRuntime } from "./builtins.js";
 import { SystemClock } from "./clock.js";
 import { configPath, loadConfig } from "./config.js";
 import { DurableDeliveryService, type DurableDeliveryTarget, type DurableDeliveryTransport } from "./durable-delivery.js";
@@ -12,7 +12,6 @@ import { ProcessRuntimeFactory } from "./runtime.js";
 import { acceptsSend } from "./state.js";
 import { SqliteStore } from "./store.js";
 import type { TigerEvent } from "./types.js";
-import { workerResultText } from "./upstream-delivery.js";
 
 export interface ImMessage {
   id: string;
@@ -196,7 +195,8 @@ function resultText(event: TigerEvent): string {
   if (event.type === "worker.error") return "Worker 执行失败，请检查 TigerCat 日志。";
   if (event.type === "worker.stalled") return "Worker 长时间没有响应，请重新发消息。";
   if (event.type === "worker.update" || event.payload.stopReason === "cancelled") return "Worker 本轮已取消。";
-  return workerResultText(event);
+  const text = event.payload.text;
+  return typeof text === "string" && text.trim() ? text : "Worker 本轮没有返回文本。";
 }
 
 export interface ImChannelHostOptions {
@@ -209,6 +209,7 @@ export interface ImChannelHostOptions {
 interface ImAdapter {
   source: string;
   databaseName: string;
+  localWorkerDefault?: boolean;
   transport: DurableDeliveryTransport;
   liveTurns?: ImLiveTurns;
   secrets: Record<string, string>;
@@ -218,7 +219,19 @@ interface ImAdapter {
 export async function serveImChannel(options: ImChannelHostOptions, adapter: ImAdapter): Promise<void> {
   const file = configPath(options.configFile);
   const config = loadConfig(file);
-  const runtime = options.runtime ?? config.defaultWorkerRuntime;
+  let runtime = options.runtime ?? config.defaultWorkerRuntime;
+  if (adapter.localWorkerDefault && !options.runtime && runtime === "worker" && !config.runtimes.some((r) => r.name === runtime)) {
+    const available = discoverRuntimes(config).filter((r) => r.builtin && r.vendorFound);
+    const selected = available.find((r) => r.name === "codex") ?? available[0];
+    if (!selected) throw new TigerError("unknown_runtime", "请安装 Codex 或 Claude Code，或通过 --runtime 指定 ACP Worker。");
+    runtime = selected.name;
+  }
+  if (adapter.localWorkerDefault) {
+    const selected = resolveRuntime(config, runtime);
+    if (selected.permission === "ask") {
+      config.runtimes = [{ ...selected, permission: "deny" }, ...config.runtimes];
+    }
+  }
   if (resolveRuntime(config, runtime).permission === "ask") {
     throw new TigerError("invalid_args", "IM text sessions cannot answer ACP permission prompts. Configure the Worker with permission=deny or permission=auto.");
   }

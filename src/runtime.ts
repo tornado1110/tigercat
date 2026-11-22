@@ -185,6 +185,7 @@ export function buildWorkerEnvironment(
   runtimeEnv: Record<string, string>,
   parentEnv: NodeJS.ProcessEnv = process.env,
   runtimeName?: string,
+  providerCredentialEnv?: string,
 ): NodeJS.ProcessEnv {
   const inherited: NodeJS.ProcessEnv = {};
   const allowedCredentials = runtimeName === "claude-code"
@@ -197,7 +198,8 @@ export function buildWorkerEnvironment(
     // the spelling used by the parent process.
     const canonical = name.toUpperCase();
     if (PRIVATE_INHERITED_ENV.has(canonical)) continue;
-    if (secretShapedEnv(canonical) && !allowedCredentials.has(canonical)) continue;
+    const providerKey = runtimeName === "codex" && (process.platform === "win32" ? canonical === providerCredentialEnv?.toUpperCase() : name === providerCredentialEnv);
+    if (secretShapedEnv(canonical) && !allowedCredentials.has(canonical) && !providerKey) continue;
     inherited[name] = value;
   }
   return { ...inherited, ...runtimeEnv };
@@ -207,9 +209,13 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
   constructor(private readonly options: ProcessRuntimeOptions = {}) {}
 
   async launch(runtime: RuntimeConfig, ctx: LaunchContext): Promise<RuntimeHandle> {
+    const env = buildWorkerEnvironment(runtime.env, process.env, runtime.name, runtime.providerCredentialEnv);
+    if (runtime.providerCredentialEnv && !env[runtime.providerCredentialEnv]) {
+      throw new TigerError("missing_provider_credential", `Codex provider requires ${runtime.providerCredentialEnv} in the TigerCat process environment.`);
+    }
     const proc = spawn(runtime.command, runtime.args, {
       cwd: ctx.cwd,
-      env: buildWorkerEnvironment(runtime.env, process.env, runtime.name),
+      env,
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
       windowsHide: true,
