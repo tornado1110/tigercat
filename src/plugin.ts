@@ -18,6 +18,7 @@ import type { AppConfig } from "./types.js";
 import { LocalLarkCli, validateLarkCliArguments, type LarkCliBinding } from "./lark-cli.js";
 import { LocalLarkTransport, MockLarkTransport, validateLarkApiRequest, type LarkApiRequest, type LarkTransport } from "./lark-transport.js";
 import { redactText } from "./redact.js";
+import { PersonalAssistant, personalAssistantMarkdown } from "./personal-assistant.js";
 
 export interface PluginOptions {
   config: AppConfig;
@@ -135,7 +136,7 @@ export async function createPluginHost(options: PluginOptions): Promise<PluginHo
       ...runtime,
       approval: runtime.permission === "ask" ? "host-elicitation" : "automatic-policy",
     }))) }] }));
-    registerLarkTools(server);
+    registerLarkTools(server, store);
     const removePermissionHandler = engine.addPermissionHandler(async (request) => {
       await handlePluginPermission(ownedEngine, server!, request);
     });
@@ -167,9 +168,10 @@ function pluginLark(): LarkTransport | undefined {
   }));
 }
 
-function registerLarkTools(server: McpServer): void {
+function registerLarkTools(server: McpServer, store: SqliteStore): void {
   const lark = pluginLark();
   if (!lark) return;
+  const personal = () => new PersonalAssistant({ transport: lark, store, clock: new SystemClock() });
   server.registerTool("lark_status", {
     description: "Read the bound lark-cli user authorization status. Bot readiness does not count as user authorization.",
     inputSchema: z.object({}),
@@ -240,6 +242,34 @@ function registerLarkTools(server: McpServer): void {
       }
     }
     return { content: [{ type: "text", text: JSON.stringify(await lark.api(request as LarkApiRequest)) }] };
+  });
+  server.registerTool("lark_personal_scan", {
+    description: "Read recently edited Feishu documents through the bound user profile and return local candidate稿件. This never sends messages or edits documents.",
+    inputSchema: z.object({}),
+  }, async () => {
+    const result = await personal().scanCandidates();
+    return { content: [{ type: "text", text: JSON.stringify({ ...result, markdown: personalAssistantMarkdown(result) }) }] };
+  });
+  server.registerTool("lark_personal_confirm", {
+    description: "Confirm candidate document ids for local tracking. Confirmation reads each document once to save a local baseline and never writes to Feishu.",
+    inputSchema: z.object({ ids: z.array(z.string()).min(1).max(20) }),
+  }, async ({ ids }) => {
+    const tracked = await personal().confirm(ids);
+    return { content: [{ type: "text", text: JSON.stringify({ tracked, count: tracked.length }) }] };
+  });
+  server.registerTool("lark_personal_refresh", {
+    description: "Re-read locally tracked Feishu documents and report content changes that need the user's judgment. This never sends messages or edits documents.",
+    inputSchema: z.object({}),
+  }, async () => {
+    const result = await personal().refresh();
+    return { content: [{ type: "text", text: JSON.stringify({ ...result, markdown: personalAssistantMarkdown(result) }) }] };
+  });
+  server.registerTool("lark_personal_list", {
+    description: "List locally tracked Feishu documents and their stable ids.",
+    inputSchema: z.object({}),
+  }, async () => {
+    const tracked = await personal().listTracked();
+    return { content: [{ type: "text", text: JSON.stringify({ tracked, count: tracked.length }) }] };
   });
 }
 

@@ -24,6 +24,9 @@ import { chatRouterFromConfig } from "./router-llm.js";
 import { SqliteStore } from "./store.js";
 import type { PermissionPolicy, RuntimeConfig } from "./types.js";
 import { VERSION } from "./version.js";
+import { LocalLarkCli } from "./lark-cli.js";
+import { LocalLarkTransport } from "./lark-transport.js";
+import { PersonalAssistant, personalAssistantMarkdown } from "./personal-assistant.js";
 
 export interface CliIo {
   stdout: (text: string) => void;
@@ -60,6 +63,9 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
       port: { type: "string" },
       token: { type: "string" },
       role: { type: "string" },
+      profile: { type: "string" },
+      "credential-home": { type: "string" },
+      lookback: { type: "string" },
     },
   });
   const command = positionals[0] ?? "help";
@@ -95,6 +101,7 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
       token: String(values.token ?? ""),
       role: values.role === "worker" ? "worker" : "router",
     }).then(() => 0);
+    if (command === "personal") return await cmdPersonal(positionals.slice(1), values, io);
     if (command === "runtime") return await cmdRuntime(positionals.slice(1), values, io);
     return await cmdTool(command, positionals.slice(1), values, io);
   } catch (error) {
@@ -102,6 +109,50 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
     if (values.json) io.stdout(`${JSON.stringify({ ok: false, error: message, code: isTigerError(error) ? error.code : "error" })}\n`);
     else io.stderr(`${message}\n`);
     return error instanceof TigerError && error.code === "usage" ? 2 : 1;
+  }
+}
+
+async function cmdPersonal(args: string[], values: Record<string, unknown>, io: CliIo): Promise<number> {
+  const sub = args[0] ?? "scan";
+  const profile = typeof values.profile === "string" ? values.profile : process.env.TIGERCAT_LARK_PROFILE_REF;
+  if (!profile) throw new TigerError("usage", "usage: tigercat personal scan|confirm|refresh|list|close --profile <profile> <ids...>");
+  const credentialHome = typeof values["credential-home"] === "string" ? values["credential-home"] : process.env.TIGERCAT_LARK_CREDENTIAL_HOME ?? process.env.HOME;
+  if (!credentialHome || !path.isAbsolute(credentialHome)) throw new TigerError("usage", "--credential-home must be an absolute path");
+  const db = process.env.TIGERCAT_DB ?? path.join(path.dirname(configPath(typeof values.config === "string" ? values.config : undefined)), "tigercat.sqlite");
+  if (db !== ":memory:") mkdirSync(path.dirname(db), { recursive: true });
+  const store = SqliteStore.open(db);
+  const lookback = typeof values.lookback === "string" ? Number(values.lookback) : undefined;
+  const cli = new LocalLarkCli({ accountRef: profile, profileRef: profile, credentialHome, credentialRevision: process.env.TIGERCAT_LARK_CREDENTIAL_REVISION ?? "local" });
+  const assistant = new PersonalAssistant({ transport: new LocalLarkTransport(cli), store, clock: new SystemClock(), lookbackDays: lookback });
+  try {
+    if (sub === "scan") {
+      const result = await assistant.scanCandidates();
+      io.stdout(values.json ? `${JSON.stringify(result)}\n` : `${personalAssistantMarkdown(result)}\n`);
+      return result.errors.length ? 1 : 0;
+    }
+    if (sub === "confirm") {
+      const tracked = await assistant.confirm(args.slice(1));
+      io.stdout(`${JSON.stringify({ tracked, count: tracked.length })}\n`);
+      return 0;
+    }
+    if (sub === "refresh") {
+      const result = await assistant.refresh();
+      io.stdout(values.json ? `${JSON.stringify(result)}\n` : `${personalAssistantMarkdown(result)}\n`);
+      return result.errors.length ? 1 : 0;
+    }
+    if (sub === "list") {
+      const tracked = await assistant.listTracked();
+      io.stdout(`${JSON.stringify({ tracked, count: tracked.length })}\n`);
+      return 0;
+    }
+    if (sub === "close") {
+      const tracked = await assistant.close(args.slice(1));
+      io.stdout(`${JSON.stringify({ tracked, count: tracked.length })}\n`);
+      return 0;
+    }
+    throw new TigerError("usage", "usage: tigercat personal scan|confirm|refresh|list|close --profile <profile> <ids...>");
+  } finally {
+    await store.close();
   }
 }
 
@@ -402,6 +453,7 @@ Usage:
   tigercat acp [--config file]
   tigercat feishu [connect] [--cwd repo] [--runtime name] [--config file]
   tigercat plugin [--config file]  MCP tools for a host-driven Codex plugin
+  tigercat personal scan|confirm|refresh|list|close --profile <profile> [ids...]
   tigercat runtime add <name> --command <cmd> [--arg a] [--env K=V] [--tag t] [--permission ask|auto|deny]
     --env is written to config.toml in plaintext. Do not put API keys there.
   tigercat runtime list
