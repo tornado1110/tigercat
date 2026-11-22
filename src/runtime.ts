@@ -40,6 +40,7 @@ export interface RuntimeHandle {
   readonly pid: number | undefined;
   readonly acpSessionId: string | undefined;
   prompt(text: string): Promise<PromptResult>;
+  steer?(text: string, signal: AbortSignal): Promise<"injected" | "promptRequired">;
   cancel(): Promise<void>;
   kill(): Promise<void>;
 }
@@ -324,7 +325,10 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
         "session/new timed out",
       );
       proc.off("error", onLaunchError);
-      return new ProcessHandle(proc, connection, session, updates, ctx.onExit);
+      const steering = init._meta?.steering;
+      const supportsSteering = typeof steering === "object" && steering !== null
+        && "supported" in steering && steering.supported === true;
+      return new ProcessHandle(proc, connection, session, updates, ctx.onExit, supportsSteering);
     } catch (error) {
       let killMessage = "";
       try {
@@ -345,6 +349,7 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
 }
 
 class ProcessHandle implements RuntimeHandle {
+  readonly steer?: RuntimeHandle["steer"];
   private promptReject: ((error: Error) => void) | undefined;
   private exited = false;
   private suppressExit = false;
@@ -356,7 +361,19 @@ class ProcessHandle implements RuntimeHandle {
     private readonly session: acp.ActiveSession,
     private readonly updates: RuntimeUpdate[],
     private readonly onExit: LaunchContext["onExit"],
+    supportsSteering: boolean,
   ) {
+    if (supportsSteering) {
+      this.steer = async (text, signal) => {
+        const result = await connection.agent.request<{ outcome?: string }>("_session/steering", {
+          sessionId: session.sessionId,
+          prompt: [{ type: "text", text }],
+          _meta: { steering: { idleBehavior: "promptRequired" } },
+        }, { cancellationSignal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]), stopWaitingOnCancel: true });
+        if (result?.outcome === "injected" || result?.outcome === "promptRequired") return result.outcome;
+        throw new TigerError("steer_unknown", "Worker did not confirm steering");
+      };
+    }
     this.proc.on("exit", (code, signal) => {
       this.exited = true;
       this.promptReject?.(new TigerError("worker_exited", "runtime process exited"));

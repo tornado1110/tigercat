@@ -7,7 +7,7 @@ import { defaultConfig } from "../../src/config.js";
 import { Engine } from "../../src/engine.js";
 import { parseFeishuMessage } from "../../src/feishu.js";
 import { ImChannel } from "../../src/im-channel.js";
-import { FakeTimeRuntimeFactory } from "../../src/runtime.js";
+import { FakeTimeRuntimeFactory, ProcessRuntimeFactory } from "../../src/runtime.js";
 import { SqliteStore } from "../../src/store.js";
 
 const access = { botOpenId: "ou_bot", users: new Set(["ou_owner"]), groups: new Set(["oc_group"]) };
@@ -29,11 +29,12 @@ function event(id: string, text: string, chat: "p2p" | "group" = "p2p", rootId?:
 }
 
 describe("native Feishu IM channel", () => {
-  it("admits authorized text and keeps group topic replies on the original route", () => {
+  it("admits authorized text and folds all topics into the group conversation", () => {
     const first = event("om_first", "@_user_1 修复测试", "group");
     const reply = event("om_reply", "@_user_1 继续", "group", "om_first");
-    expect(parseFeishuMessage(first, access)).toMatchObject({ text: "修复测试", replyTarget: { messageId: "om_first", inThread: "true" } });
+    expect(parseFeishuMessage(first, access)).toMatchObject({ text: "修复测试", replyTarget: { messageId: "om_first", inThread: "false" } });
     expect(parseFeishuMessage(first, access)?.conversation).toBe(parseFeishuMessage(reply, access)?.conversation);
+    expect(parseFeishuMessage(first, access)?.conversation).toBe(parseFeishuMessage(event("other", "@_user_1 more", "group"), access)?.conversation);
     expect(parseFeishuMessage(first, access)?.conversation).not.toBe(parseFeishuMessage(event("other", "private"), access)?.conversation);
 
     expect(parseFeishuMessage({ ...first, sender: { ...first.sender, sender_type: "app" } }, access)).toBeUndefined();
@@ -43,7 +44,50 @@ describe("native Feishu IM channel", () => {
     expect(parseFeishuMessage({ ...first, message: { ...first.message, message_type: "file" } }, access)).toBeUndefined();
   });
 
-  it("deduplicates receipts, serializes a conversation, and replies to the matching messages", async () => {
+  it.each([
+    { followup: "correction", ok: true, result: "original + correction" },
+    { followup: "cancel", ok: false, result: "本轮已取消" },
+  ])("delivers one answer to the opener after a cold-start ACP follow-up ($followup)", async ({ followup, ok, result }) => {
+    const root = await mkdtemp(path.join(tmpdir(), "tigercat-steer-"));
+    const store = SqliteStore.open(path.join(root, "state.sqlite"));
+    const config = defaultConfig();
+    config.runtimes = [{
+      name: "stub", command: process.execPath, args: [path.resolve("test/stub-agent.ts")],
+      env: { TIGERCAT_STUB_SCENARIO: "steer" }, tags: [], permission: "deny", description: "steerable ACP peer",
+    }];
+    const engine = new Engine({ store, clock: new SystemClock(), config, factory: new ProcessRuntimeFactory(), workspaceRoot: root });
+    const replies: Array<[string, string]> = [];
+    const statuses: string[] = [];
+    const channel = new ImChannel(engine, "feishu:test", "stub", {
+      send: async ({ target, text }) => {
+        replies.push([target.messageId!, text]);
+        return { disposition: "delivered", reason: "accepted" };
+      },
+    }, (message) => { throw new Error(message); }, {
+      joined: async ({ messageId }) => {
+        statuses.push(`${messageId}:joined`);
+        return async (ok) => { statuses.push(`${messageId}:${ok}`); };
+      },
+    });
+    try {
+      await engine.start();
+      await channel.start();
+      const first = parseFeishuMessage(event("one", "original"), access)!;
+      const second = parseFeishuMessage(event("two", followup), access)!;
+      await Promise.all([channel.receive(first), channel.receive(second), channel.receive(second)]);
+      expect(statuses).toEqual(["two:joined", `two:${ok}`]);
+      expect(replies).toEqual([["one", expect.stringContaining(result)]]);
+      expect(await engine.list()).toHaveLength(1);
+      expect(await store.listDeliveries()).toHaveLength(1);
+    } finally {
+      await channel.stop();
+      await engine.close();
+      await store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates receipts, falls back to sequential turns on an unsupported runtime, and replies to the matching messages", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "tigercat-feishu-test-"));
     const store = SqliteStore.open(path.join(root, "state.sqlite"));
     const clock = new SystemClock();
@@ -57,7 +101,7 @@ describe("native Feishu IM channel", () => {
         sent.set(target.messageId!, text);
         return { disposition: "delivered", reason: "test accepted it" };
       },
-    }, (message) => { throw new Error(message); });
+    }, (message) => { throw new Error(message); }, { joined: async () => { throw new Error("unexpected join"); } });
     try {
       await engine.start();
       await channel.start();

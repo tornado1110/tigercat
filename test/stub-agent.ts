@@ -16,6 +16,8 @@ interface Session {
   pending: AbortController | null;
 }
 
+let acceptSteer: ((text: string) => void) | undefined;
+let steerAttempts = 0;
 const sessions = new Map<string, Session>();
 
 const stream = acp.ndJsonStream(
@@ -35,6 +37,7 @@ const connection = acp
     }
     return {
       protocolVersion: acp.PROTOCOL_VERSION,
+      _meta: scenario === "steer" ? { steering: { supported: true } } : undefined,
       agentCapabilities: { loadSession: scenario !== "no-session-load" },
       agentInfo: { name: stubName, version: "0.0.0" },
     };
@@ -53,6 +56,17 @@ const connection = acp
   .onRequest(acp.methods.agent.session.load, () => {
     throw acp.RequestError.methodNotFound("session/load");
   })
+  .onRequest("_session/steering", (raw) => raw as {
+    sessionId: string; prompt: unknown; _meta?: { steering?: { idleBehavior?: string } };
+  }, ({ params }) => {
+    if (params.sessionId !== "stub-session" || params._meta?.steering?.idleBehavior !== "promptRequired") {
+      throw acp.RequestError.invalidParams();
+    }
+    if (!acceptSteer || steerAttempts++ === 0) return { outcome: "promptRequired", reason: "noRunningTurn" };
+    acceptSteer(promptText(params.prompt));
+    acceptSteer = undefined;
+    return { outcome: "injected" };
+  })
   .onRequest(acp.methods.agent.session.prompt, async ({ params, client, signal }) => {
     const session = sessions.get(params.sessionId) ?? { pending: null };
     sessions.set(params.sessionId, session);
@@ -60,6 +74,11 @@ const connection = acp
     session.pending = pending;
     if (scenario !== "ignore-cancel") {
       signal.addEventListener("abort", () => pending.abort(), { once: true });
+    }
+    if (scenario === "steer") {
+      const addition = await new Promise<string>((resolve) => { acceptSteer = resolve; });
+      await chunk(client, params.sessionId, `${promptText(params.prompt)} + ${addition}`);
+      return { stopReason: addition === "cancel" ? "cancelled" as const : "end_turn" as const };
     }
     if (scenario === "garbage-stdout") {
       process.stdout.write("this is not json-rpc\n");

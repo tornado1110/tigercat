@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, open, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { resolveRuntime } from "./builtins.js";
 import { SystemClock } from "./clock.js";
 import { configPath, loadConfig } from "./config.js";
@@ -21,8 +22,19 @@ export interface ImMessage {
   replyTarget: DurableDeliveryTarget;
 }
 
+interface ActiveTurn {
+  workerId: string;
+  result: Promise<TigerEvent | undefined>;
+}
+
+interface ImLiveTurns {
+  joined(target: DurableDeliveryTarget): Promise<(success: boolean) => Promise<void>>;
+}
+
 export class ImChannel {
-  private readonly queues = new Map<string, Promise<void>>();
+  private readonly active = new Map<string, ActiveTurn>();
+  private readonly pending = new Set<Promise<void>>();
+  private readonly admissions = new Map<string, Promise<void>>();
   private readonly abort = new AbortController();
   private readonly outbox: DurableDeliveryService;
   private deliveryQueue = Promise.resolve();
@@ -33,6 +45,7 @@ export class ImChannel {
     private readonly runtime: string,
     transport: DurableDeliveryTransport,
     private readonly report: (message: string) => void,
+    private readonly liveTurns?: ImLiveTurns,
   ) {
     this.outbox = new DurableDeliveryService(engine.store, transport, {
       clock: engine.clock,
@@ -48,23 +61,28 @@ export class ImChannel {
 
   receive(message: ImMessage): Promise<void> {
     if (this.abort.signal.aborted) return Promise.resolve();
-    const queue = this.queues.get(message.conversation) ?? Promise.resolve();
-    const task = queue.then(() => this.handle(message)).catch(() => {
-      this.report("IM 消息处理失败，请检查 TigerCat 状态。");
-    }).finally(() => {
-      if (this.queues.get(message.conversation) === task) this.queues.delete(message.conversation);
+    const key = message.conversation;
+    // Only admission is ordered. Each message observes its own turn outside this lock.
+    const previous = this.admissions.get(key) ?? Promise.resolve();
+    const admitted = previous.then(() => this.admit(message));
+    const release = admitted.then(() => {}, () => {}).finally(() => {
+      if (this.admissions.get(key) === release) this.admissions.delete(key);
     });
-    this.queues.set(message.conversation, task);
+    this.admissions.set(key, release);
+    const task = admitted.then((deliver) => deliver?.()).catch(() => {
+      this.report("IM 消息处理失败，请检查 TigerCat 状态。");
+    }).finally(() => this.pending.delete(task));
+    this.pending.add(task);
     return task;
   }
 
   async stop(): Promise<void> {
     this.abort.abort();
-    await Promise.all(this.queues.values());
+    await Promise.all(this.pending);
     await this.outbox.stop();
   }
 
-  private async handle(message: ImMessage): Promise<void> {
+  private async admit(message: ImMessage): Promise<(() => Promise<void>) | undefined> {
     if (this.abort.signal.aborted) return;
     const store = this.engine.store;
     // Claim before dispatching so duplicate provider messages never execute
@@ -79,8 +97,22 @@ export class ImChannel {
     if (!receipt.claimed) return;
 
     let workerId = "";
-    let text: string;
+    const reply = (text: string) => this.deliver(receipt.receipt.triggerId, workerId, message.replyTarget, text);
     try {
+      const turn = this.active.get(message.conversation);
+      if (turn) {
+        workerId = turn.workerId;
+        if (this.liveTurns && await this.joinTurn(message, turn)) {
+          const status = this.liveTurns;
+          return async () => {
+            const finish = await status.joined(message.replyTarget);
+            const event = await turn.result;
+            await finish(event?.type === "worker.turn_end" && event.payload.stopReason !== "cancelled");
+          };
+        }
+        await turn.result;
+        if (this.abort.signal.aborted) return;
+      }
       const thread = await store.upsertThread(JSON.stringify([this.source, message.conversation]), this.source, this.engine.clock.now());
       const worker = (await store.listSessions("worker"))
         .findLast((session) => session.threadId === thread.id && session.runtime === this.runtime);
@@ -94,19 +126,43 @@ export class ImChannel {
         const spawned = await this.engine.spawn({ runtime: this.runtime, task: message.text, thread: thread.id });
         workerId = spawned.workerId;
       }
-      const event = await this.waitForResult(workerId, baseline);
-      if (!event) return;
-      text = resultText(event);
+      const result = this.waitForResult(workerId, baseline).finally(() => {
+        this.active.delete(message.conversation);
+      });
+      this.active.set(message.conversation, { workerId, result });
+      return async () => {
+        const event = await result;
+        if (event) await reply(resultText(event));
+      };
     } catch (error) {
       if (this.abort.signal.aborted) return;
-      text = error instanceof TigerError && error.code === "max_concurrency"
+      const text = error instanceof TigerError && error.code === "max_concurrency"
         ? "Worker 已满，请稍后重新发消息。"
-        : "TigerCat 无法处理这条消息，请检查本地 Worker 配置。";
+        : "TigerCat 未能确认这条消息的处理状态，请检查本地 Worker。";
+      return () => reply(text);
     }
+  }
+
+  private async joinTurn(message: ImMessage, turn: ActiveTurn): Promise<boolean> {
+    // The Worker or its native prompt may still be starting. Only retry an
+    // explicit no-running-turn response; a lost acknowledgement may mean it ran.
+    const deadline = Date.now() + 45_000;
+    let retryMs = 100;
+    while (this.active.get(message.conversation) === turn && !this.abort.signal.aborted) {
+      const outcome = await this.engine.steer(turn.workerId, message.text, this.abort.signal);
+      if (outcome === "injected") return true;
+      if (outcome === "unsupported" || Date.now() >= deadline) break;
+      await delay(retryMs, undefined, { signal: this.abort.signal });
+      retryMs = Math.min(retryMs * 2, 1_500);
+    }
+    return false;
+  }
+
+  private async deliver(eventId: string, workerId: string, target: DurableDeliveryTarget, text: string): Promise<void> {
     // Serialize enqueue-and-pump so an enqueue cannot miss the last
     // in-flight pump's snapshot of pending deliveries.
     const delivery = this.deliveryQueue.then(async () => {
-      await this.outbox.enqueue({ eventId: receipt.receipt.triggerId, workerId, text, target: message.replyTarget });
+      await this.outbox.enqueue({ eventId, workerId, text, target });
       await this.outbox.pump();
     });
     this.deliveryQueue = delivery.catch(() => undefined);
@@ -119,7 +175,8 @@ export class ImChannel {
     let finish!: (event: TigerEvent | undefined) => void;
     const result = new Promise<TigerEvent | undefined>((resolve) => { finish = resolve; });
     const matches = (event: TigerEvent) => event.workerId === workerId && event.seq > baseline
-      && (event.type === "worker.turn_end" || event.type === "worker.error" || event.type === "worker.stalled");
+      && (event.type === "worker.turn_end" || event.type === "worker.error" || event.type === "worker.stalled"
+        || (event.type === "worker.update" && event.payload.state === "killed"));
     const unsubscribe = this.engine.addHook((event) => {
       if (matches(event)) finish(event);
     });
@@ -138,7 +195,7 @@ export class ImChannel {
 function resultText(event: TigerEvent): string {
   if (event.type === "worker.error") return "Worker 执行失败，请检查 TigerCat 日志。";
   if (event.type === "worker.stalled") return "Worker 长时间没有响应，请重新发消息。";
-  if (event.payload.stopReason === "cancelled") return "Worker 本轮已取消。";
+  if (event.type === "worker.update" || event.payload.stopReason === "cancelled") return "Worker 本轮已取消。";
   return workerResultText(event);
 }
 
@@ -153,6 +210,7 @@ interface ImAdapter {
   source: string;
   databaseName: string;
   transport: DurableDeliveryTransport;
+  liveTurns?: ImLiveTurns;
   secrets: Record<string, string>;
   connect: (receive: (message: ImMessage) => void, signal: AbortSignal) => Promise<void>;
 }
@@ -186,7 +244,7 @@ export async function serveImChannel(options: ImChannelHostOptions, adapter: ImA
     store = SqliteStore.open(db);
     engine = new Engine({ store, clock: new SystemClock(), config, factory: new ProcessRuntimeFactory(), workspaceRoot: options.cwd });
     for (const [name, secret] of Object.entries(adapter.secrets)) engine.noteSecret(name, secret);
-    const active = new ImChannel(engine, adapter.source, runtime, adapter.transport, options.report);
+    const active = new ImChannel(engine, adapter.source, runtime, adapter.transport, options.report, adapter.liveTurns);
     channel = active;
     await engine.start();
     await active.start();
