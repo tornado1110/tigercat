@@ -60,7 +60,7 @@ export function feishuReplyCard(text: string, identity?: ReplyIdentity): string 
   const elements: object[] = [{ tag: "markdown", content: text }];
   if (identity) {
     const runtime = identity.runtime === "codex" ? "Codex" : identity.runtime === "claude-code" ? "Claude Code" : identity.runtime;
-    const labels = [identity.project && `📁 ${identity.project}`, runtime, identity.model, identity.effort]
+    const labels = [identity.workspace && `工作区 ${identity.workspace}`, runtime, identity.model, identity.effort]
       .filter((label): label is string => Boolean(label)).map((label) => label.replace(/\s+/g, " ").trim().slice(0, 80));
     elements.push({ tag: "div", text: { tag: "plain_text", content: labels.join(" · "), text_size: "notation", text_color: "grey" } });
   }

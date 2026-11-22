@@ -39,7 +39,7 @@ export interface ReplyIdentity {
   runtime: string;
   model?: string;
   effort?: string;
-  project?: string;
+  workspace?: string;
 }
 
 export interface DeliveryRecord {
