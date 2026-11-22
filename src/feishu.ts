@@ -6,6 +6,8 @@ import { bindingFile, loadOrRegisterFeishu } from "./feishu-binding.js";
 import type { EventHandles, Logger } from "@larksuiteoapi/node-sdk";
 import { TigerError } from "./errors.js";
 import { serveImChannel, type ImChannelHostOptions, type ImMessage } from "./im-channel.js";
+import { LocalLarkCli, type LarkCliBinding } from "./lark-cli.js";
+import { LocalLarkTransport, type LarkTransport } from "./lark-transport.js";
 
 import type { ReplyIdentity } from "./store.js";
 
@@ -71,6 +73,20 @@ function idSet(value: string | undefined): Set<string> {
   return new Set((value ?? "").split(",").map((item) => item.trim()).filter(Boolean));
 }
 
+function personalLarkTransport(): LarkTransport | undefined {
+  const accountRef = process.env.TIGERCAT_LARK_ACCOUNT_REF;
+  const profileRef = process.env.TIGERCAT_LARK_PROFILE_REF;
+  const credentialHome = process.env.TIGERCAT_LARK_CREDENTIAL_HOME;
+  const credentialRevision = process.env.TIGERCAT_LARK_CREDENTIAL_REVISION;
+  if (!accountRef || !profileRef || !credentialHome || !credentialRevision || !path.isAbsolute(credentialHome)) return undefined;
+  const binding: LarkCliBinding = { accountRef, profileRef, credentialHome, credentialRevision };
+  return new LocalLarkTransport(new LocalLarkCli(binding, {
+    binary: process.env.TIGERCAT_LARK_BIN,
+    expectedVersion: process.env.TIGERCAT_LARK_EXPECTED_VERSION,
+    versionPolicy: process.env.TIGERCAT_LARK_VERSION_POLICY === "exact" ? "exact" : "same-minor",
+  }));
+}
+
 export async function serveFeishu(options: ImChannelHostOptions): Promise<void> {
   let appId = process.env.TIGERCAT_FEISHU_APP_ID?.trim();
   let appSecret = process.env.TIGERCAT_FEISHU_APP_SECRET?.trim();
@@ -108,6 +124,7 @@ export async function serveFeishu(options: ImChannelHostOptions): Promise<void> 
     if (!botOpenId) throw new TigerError("feishu_identity", "已保存授权，飞书暂未返回机器人身份。请重新运行 tigercat feishu connect。");
   }
   const access = { botOpenId, users, groups };
+  const personal = personalLarkTransport();
   await serveImChannel(options, {
     localWorkerDefault: managed,
     source: `feishu:${appId}`,
@@ -160,6 +177,7 @@ export async function serveFeishu(options: ImChannelHostOptions): Promise<void> 
         return { disposition: "unknown", reason: "Feishu did not confirm the reply" };
       },
     },
+    personal: personal ? { transport: personal } : undefined,
     connect: async (receive, signal) => {
       let socket: InstanceType<typeof WSClient> | undefined;
       let onAbort: (() => void) | undefined;
