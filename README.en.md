@@ -1,5 +1,5 @@
 <!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
-> The Simplified Chinese version is authoritative. This translation may lag behind it.
+> The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # TigerCat
 

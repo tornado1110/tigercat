@@ -314,4 +314,42 @@ describe("real stdio stub-agent", () => {
     await harness.engine.close();
     await harness.store.close();
   });
+
+  it("ask-input: preserves the worker's awaiting-input state", async () => {
+    const harness = await startStdioEngine("ask-input");
+    roots.push(harness.root);
+    const spawned = await harness.engine.spawn({ runtime: "ask-input", prompt: "choose a file", threads: ["feishu:eng:cli"] });
+    const end = await waitForEvent(harness.engine, (event) => event.type === "worker.turn_end");
+    expect(end.workerId).toBe(spawned.workerId);
+    expect(end.payload.awaitingInput).toBe(true);
+    expect(end.payload.text).toContain("Which file should I edit?");
+    await harness.engine.close();
+    await harness.store.close();
+  });
+
+  it("slow-stream: forwards all streamed chunks before turn end", async () => {
+    const harness = await startStdioEngine("slow-stream");
+    roots.push(harness.root);
+    const spawned = await harness.engine.spawn({ runtime: "slow-stream", prompt: "stream", threads: ["feishu:eng:cli"] });
+    for (let index = 0; index < 4; index += 1) {
+      await waitForEvent(harness.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.update" && event.payload.text === `tick-${index} `);
+    }
+    const end = await waitForEvent(harness.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+    expect(end.payload.stopReason).toBe("end_turn");
+    await harness.engine.close();
+    await harness.store.close();
+  });
+
+  it("huge-output: caps the stored turn summary", async () => {
+    const harness = await startStdioEngine("huge-output");
+    roots.push(harness.root);
+    const spawned = await harness.engine.spawn({ runtime: "huge-output", prompt: "large", threads: ["feishu:eng:cli"] });
+    const end = await waitForEvent(harness.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+    expect(String(end.payload.text ?? "").length).toBe(65_536);
+    expect(String(end.payload.summary ?? "").length).toBeLessThanOrEqual(1_000);
+    const read = await harness.engine.read(end.id);
+    expect(JSON.stringify(read)).toContain("spilled");
+    await harness.engine.close();
+    await harness.store.close();
+  });
 });

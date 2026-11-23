@@ -1,5 +1,5 @@
 <!-- i18n-source: CONTRIBUTING.md @ d8a7e4947594cb1533818c5d1b67bcbba8b116da -->
-> The Simplified Chinese version is authoritative. This translation may lag behind it.
+> The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Contributing to TigerCat
 
