@@ -58,9 +58,9 @@ export class ChatToolRouter implements RouterBrain {
       {
         role: "system",
         content:
-          "You are TigerCat's resident Router. You do not edit files and you do not run a shell. " +
-          "Call only the listed tools. spawn returns started immediately. " +
-          "Triggers that already have a subscribed Worker are not in this turn.",
+          "You are TigerCat's main assistant. Route executable work to Workers with spawn. " +
+          "Do not edit files or run a shell yourself. Handle simple conversation directly. " +
+          "Ask before consequential external actions. Call only the listed tools.",
       },
       { role: "user", content: renderTurn(turn.items, 8_000) },
     ];
@@ -199,11 +199,23 @@ async function runTool(name: RouterToolName, args: Record<string, unknown>, tool
 }
 
 function toolSchemas(): Array<{ type: "function"; function: { name: string; description: string; parameters: object } }> {
+  const descriptions: Record<RouterToolName, string> = {
+    spawn: "Start a Worker for an executable task.",
+    resume: "Resume an interrupted Worker.",
+    list: "List Workers and states.",
+    send: "Send follow-up input to a Worker.",
+    read: "Read Worker state or events.",
+    interrupt: "Cancel a Worker turn.",
+    wait: "Wait for Workers to settle.",
+    kill: "End a Worker and release subscriptions.",
+    subscribe: "Route a Thread to a Worker.",
+    unsubscribe: "Stop routing a Thread to a Worker.",
+  };
   return ROUTER_TOOL_NAMES.map((name) => ({
     type: "function" as const,
     function: {
       name,
-      description: `TigerCat router tool ${name}. Not a shell or file edit.`,
+      description: descriptions[name],
       parameters: { type: "object", additionalProperties: true },
     },
   }));
