@@ -35,7 +35,7 @@ tigercat runtime test codex
 
 同一目录里的 `server/cli.js plugin` 是普通 MCP 入口，也可由 Claude Code 或其他 MCP 宿主启动；将其工作目录设为插件根目录，跨机器时用绝对路径。`.codex-plugin` 清单只负责 Codex 的安装发现，Worker/ACP 核心不依赖特定宿主。
 
-当前 Codex 会话可以调用 `runtimes`、`spawn`、`resume`、`list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe` 和 `unsubscribe`；配置 Lark 绑定后还会出现 `lark_status`、`lark_discover` 和 `lark_execute`。`spawn` 必须带用户项目的绝对 `cwd`；`wait` 每次最多 30 秒。插件启动目录是安装目录，不能据此推断项目路径。Worker 的实际编程能力仍来自所选 ACP runtime。
+当前 Codex 会话可以调用 `runtimes`、`spawn`、`resume`、`list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe` 和 `unsubscribe`；配置 Lark 绑定后还会出现 `lark_status`、`lark_discover` 和 `lark_execute`。对仓库检查、编码、测试、调查和持续任务，主会话应主动调度 Worker，不需要用户额外说“使用 TigerCat”。解释、澄清和闲聊由主会话直接处理，外部副作用仍需用户确认。`spawn` 必须带用户项目的绝对 `cwd`；`wait` 每次最多 30 秒。插件启动目录是安装目录，不能据此推断项目路径。Worker 的实际编程能力仍来自所选 ACP runtime。
 
 Worker 的 `permission = "ask"` 会通过 MCP elicitation 交给当前 Codex 宿主审批；宿主不支持审批 UI 或用户拒绝时，Worker 只会取消，TigerCat 不会自动放行。插件还提供可选的本地 `lark-cli` capability（需宿主显式配置绑定），用于按 profile 读取授权状态、按需发现能力和执行用户明确授权的业务命令；未知写入结果不会盲重试。
 
