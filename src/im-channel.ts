@@ -12,8 +12,6 @@ import { ProcessRuntimeFactory } from "./runtime.js";
 import { acceptsSend } from "./state.js";
 import { SqliteStore, type ReplyIdentity } from "./store.js";
 import type { TigerEvent } from "./types.js";
-import { PersonalAssistant, personalAssistantMarkdown } from "./personal-assistant.js";
-import type { LarkTransport } from "./lark-transport.js";
 
 export interface ImMessage {
   id: string;
@@ -48,7 +46,6 @@ export class ImChannel {
     private readonly report: (message: string) => void,
     private readonly liveTurns?: ImLiveTurns,
     private readonly workspace?: string,
-    private readonly personalCommand?: (text: string) => Promise<string | undefined>,
   ) {
     this.outbox = new DurableDeliveryService(engine.store, transport, {
       clock: engine.clock,
@@ -116,13 +113,6 @@ export class ImChannel {
       effort: typeof event?.payload.effort === "string" ? event.payload.effort : undefined,
     });
     try {
-      const personalReply = await this.personalCommand?.(message.text);
-      if (personalReply) {
-        return async () => {
-          await reply(personalReply);
-          return true;
-        };
-      }
       const turn = this.active.get(message.conversation);
       if (turn) {
         workerId = turn.workerId;
@@ -241,7 +231,6 @@ interface ImAdapter {
   transport: DurableDeliveryTransport;
   liveTurns?: ImLiveTurns;
   secrets: Record<string, string>;
-  personal?: { transport: LarkTransport; lookbackDays?: number };
   connect: (receive: (message: ImMessage) => void, signal: AbortSignal) => Promise<void>;
 }
 
@@ -286,8 +275,7 @@ export async function serveImChannel(options: ImChannelHostOptions, adapter: ImA
     store = SqliteStore.open(db);
     engine = new Engine({ store, clock: new SystemClock(), config, factory: new ProcessRuntimeFactory(), workspaceRoot: options.cwd });
     for (const [name, secret] of Object.entries(adapter.secrets)) engine.noteSecret(name, secret);
-    const personal = adapter.personal ? new PersonalAssistant({ transport: adapter.personal.transport, store, clock: engine.clock, lookbackDays: adapter.personal.lookbackDays }) : undefined;
-    const active = new ImChannel(engine, adapter.source, runtime, adapter.transport, options.report, adapter.liveTurns, path.basename(options.cwd), personal ? (text) => handlePersonalCommand(personal, text) : undefined);
+    const active = new ImChannel(engine, adapter.source, runtime, adapter.transport, options.report, adapter.liveTurns, path.basename(options.cwd));
     channel = active;
     await engine.start();
     await active.start();
@@ -315,50 +303,4 @@ export async function serveImChannel(options: ImChannelHostOptions, adapter: ImA
       }
     }
   }
-}
-
-async function handlePersonalCommand(assistant: PersonalAssistant, text: string): Promise<string | undefined> {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized.includes("稿") && !/盯|跟踪|刷新/.test(normalized)) return;
-  if (/扫描|候选|找/.test(normalized) && !/盯|跟踪|确认/.test(normalized)) {
-    return personalAssistantMarkdown(await assistant.scanCandidates());
-  }
-  if (/刷新|更新|检查/.test(normalized)) {
-    return personalAssistantMarkdown(await assistant.refresh());
-  }
-  if (/停止|结束|关闭/.test(normalized)) {
-    const ids = await candidateIds(assistant, text);
-    if (!ids.length) return "请先提供稿件编号，或说“扫描稿件”查看候选列表。";
-    const remaining = await assistant.close(ids);
-    return `已停止跟踪 ${ids.length} 篇稿件，当前还在跟踪 ${remaining.length} 篇。`;
-  }
-  if (/盯|跟踪|确认/.test(normalized)) {
-    const ids = await candidateIds(assistant, text);
-    if (!ids.length) return personalAssistantMarkdown(await assistant.scanCandidates());
-    const tracked = await assistant.confirm(ids);
-    return `已开始跟踪 ${tracked.length} 篇稿件。之后只有出现需要你判断的变化才会提醒。`;
-  }
-  return;
-}
-
-async function candidateIds(assistant: PersonalAssistant, text: string): Promise<string[]> {
-  const explicit = [...text.matchAll(/(?:docx|wiki):[A-Za-z0-9_-]+/gi)].map((match) => match[0]);
-  if (explicit.length) return explicit;
-  const candidates = (await assistant.scanCandidates()).candidates;
-  if (/这\s*(?:三|3)\s*篇/.test(text)) return candidates.slice(0, 3).map((candidate) => candidate.id);
-  const numbers = [...text.matchAll(/(?:第\s*)?(\d+|[一二三四五六七八九十]+)\s*(?:篇|个)?/g)]
-    .map((match) => chineseNumber(match[1]))
-    .filter((value): value is number => value !== undefined && value > 0);
-  return [...new Set(numbers)].map((index) => candidates[index - 1]?.id).filter((value): value is string => Boolean(value));
-}
-
-function chineseNumber(value: string): number | undefined {
-  if (/^\d+$/.test(value)) return Number(value);
-  const digits: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
-  if (value.length === 1) return digits[value];
-  if (value === "十一") return 11;
-  if (value.startsWith("十")) return 10 + (digits[value[1]] ?? 0);
-  if (value.endsWith("十")) return (digits[value[0]] ?? 0) * 10;
-  if (value.length === 3 && value[1] === "十") return (digits[value[0]] ?? 0) * 10 + (digits[value[2]] ?? 0);
-  return;
 }

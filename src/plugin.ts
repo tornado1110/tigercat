@@ -18,7 +18,7 @@ import type { AppConfig } from "./types.js";
 import { LocalLarkCli, validateLarkCliArguments, type LarkCliBinding } from "./lark-cli.js";
 import { LocalLarkTransport, MockLarkTransport, validateLarkApiRequest, type LarkApiRequest, type LarkTransport } from "./lark-transport.js";
 import { redactText } from "./redact.js";
-import { PersonalAssistant, personalAssistantMarkdown } from "./personal-assistant.js";
+import { LarkResourceSource, PersonalResourceTracker, resourceScanMarkdown } from "./personal-resources.js";
 
 export interface PluginOptions {
   config: AppConfig;
@@ -171,7 +171,7 @@ function pluginLark(): LarkTransport | undefined {
 function registerLarkTools(server: McpServer, store: SqliteStore): void {
   const lark = pluginLark();
   if (!lark) return;
-  const personal = () => new PersonalAssistant({ transport: lark, store, clock: new SystemClock() });
+  const personal = () => new PersonalResourceTracker({ source: new LarkResourceSource(lark), store, clock: new SystemClock() });
   server.registerTool("lark_status", {
     description: "Read the bound lark-cli user authorization status. Bot readiness does not count as user authorization.",
     inputSchema: z.object({}),
@@ -243,32 +243,32 @@ function registerLarkTools(server: McpServer, store: SqliteStore): void {
     }
     return { content: [{ type: "text", text: JSON.stringify(await lark.api(request as LarkApiRequest)) }] };
   });
-  server.registerTool("lark_personal_scan", {
-    description: "Read recently edited Feishu documents through the bound user profile and return local candidate稿件. This never sends messages or edits documents.",
-    inputSchema: z.object({}),
-  }, async () => {
-    const result = await personal().scanCandidates();
-    return { content: [{ type: "text", text: JSON.stringify({ ...result, markdown: personalAssistantMarkdown(result) }) }] };
+  server.registerTool("personal_resources_scan", {
+    description: "Search an authorized personal source for resources and return candidates for local confirmation. Supported Lark sources include documents, mail, minutes, and messages. This never sends messages or edits source data.",
+    inputSchema: z.object({ source: z.string().min(1), query: z.string().optional(), sinceDays: z.number().int().positive().max(3650).optional(), limit: z.number().int().positive().max(50).optional() }),
+  }, async ({ source, query, sinceDays, limit }) => {
+    const result = await personal().scan({ source, query, sinceDays, limit });
+    return { content: [{ type: "text", text: JSON.stringify({ ...result, markdown: resourceScanMarkdown(result) }) }] };
   });
-  server.registerTool("lark_personal_confirm", {
-    description: "Confirm candidate document ids for local tracking. Confirmation reads each document once to save a local baseline and never writes to Feishu.",
+  server.registerTool("personal_resources_confirm", {
+    description: "Confirm resource ids from the latest scan for local tracking. Confirmation reads each resource once to save a local baseline and never writes to the source.",
     inputSchema: z.object({ ids: z.array(z.string()).min(1).max(20) }),
   }, async ({ ids }) => {
     const tracked = await personal().confirm(ids);
     return { content: [{ type: "text", text: JSON.stringify({ tracked, count: tracked.length }) }] };
   });
-  server.registerTool("lark_personal_refresh", {
-    description: "Re-read locally tracked Feishu documents and report content changes that need the user's judgment. This never sends messages or edits documents.",
+  server.registerTool("personal_resources_refresh", {
+    description: "Re-read locally tracked resources and report changes that need the user's judgment. This never sends messages or edits source data.",
     inputSchema: z.object({}),
   }, async () => {
     const result = await personal().refresh();
-    return { content: [{ type: "text", text: JSON.stringify({ ...result, markdown: personalAssistantMarkdown(result) }) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ ...result, markdown: resourceScanMarkdown(result) }) }] };
   });
-  server.registerTool("lark_personal_list", {
-    description: "List locally tracked Feishu documents and their stable ids.",
+  server.registerTool("personal_resources_list", {
+    description: "List locally tracked resources and their stable ids.",
     inputSchema: z.object({}),
   }, async () => {
-    const tracked = await personal().listTracked();
+    const tracked = await personal().list();
     return { content: [{ type: "text", text: JSON.stringify({ tracked, count: tracked.length }) }] };
   });
 }
