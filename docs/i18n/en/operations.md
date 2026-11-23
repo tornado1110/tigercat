@@ -1,5 +1,5 @@
 <!-- i18n-source: docs/operations.md @ 3452da8c151a5f5df97290f28906e96d7143b976 -->
-> The Simplified Chinese version is authoritative. This translation may lag behind it.
+> The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Operating TigerCat
 

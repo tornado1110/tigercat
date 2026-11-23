@@ -1,5 +1,5 @@
 <!-- i18n-source: SECURITY.md @ 023e9ea6731ad9ceead7895dbe7c0765d2646630 -->
-> The Simplified Chinese version is authoritative. This translation may lag behind it.
+> The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Security policy
 

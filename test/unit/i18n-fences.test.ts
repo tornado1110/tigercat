@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const root = new URL("../../", import.meta.url);
@@ -14,11 +14,11 @@ describe("translated fenced blocks match the Chinese source", () => {
       assertFencedBlocksMatch(readRepo(sourceName), translation, name);
     }
     for (const lang of LANGS) {
-      const dir = new URL(`docs/i18n/${lang}/`, root);
-      for (const file of readdirSync(dir)) {
-        if (!file.endsWith(".md")) continue;
+      for (const file of translatedDocNames()) {
         const rel = `docs/i18n/${lang}/${file}`;
+        expect(existsSync(new URL(rel, root)), `${rel} is missing`).toBe(true);
         const translation = readRepo(rel);
+        assertTranslationHeader(translation, rel);
         const sourceName = sourcePath(translation, rel);
         assertFencedBlocksMatch(readRepo(sourceName), translation, rel);
       }
@@ -39,6 +39,13 @@ describe("translated fenced blocks match the Chinese source", () => {
     const extra = `${readRepo("README.ko.md")}\n\`\`\`\nextra\n\`\`\`\n`;
     expect(() => assertFencedBlocksMatch(source, extra, "README.ko.md")).toThrow(/fence count/);
   });
+
+  it("fails when the machine-assisted translation note is removed", () => {
+    const original = readRepo("README.en.md");
+    const changed = original.replace(/ Machine-assisted translation; corrections are welcome\./g, "");
+    expect(changed).not.toBe(original);
+    expect(() => assertTranslationHeader(changed, "README.en.md")).toThrow(/machine-assisted translation note/);
+  });
 });
 
 function readRepo(path: string): string {
@@ -50,6 +57,22 @@ function sourcePath(translation: string, label: string): string {
   const match = /^<!--\s*i18n-source:\s*(\S+)\s+@\s*[0-9a-f]{40}\s*-->$/.exec(header);
   if (!match?.[1]) throw new Error(`${label}: missing i18n-source header`);
   return match[1];
+}
+
+function translatedDocNames(): string[] {
+  const names = new Set<string>();
+  for (const lang of LANGS) {
+    const directory = new URL(`../../docs/i18n/${lang}/`, import.meta.url);
+    for (const file of readdirSync(directory)) if (file.endsWith(".md")) names.add(file);
+  }
+  return [...names].sort();
+}
+
+function assertTranslationHeader(translation: string, label: string): void {
+  const lines = translation.split(/\r?\n/);
+  if (!lines[1] || /machine-assisted|machine translation|機械翻訳|기계 번역|traducción automática|ayuda automática/i.test(lines[1]) === false) {
+    throw new Error(`${label}: missing machine-assisted translation note`);
+  }
 }
 
 export function assertFencedBlocksMatch(source: string, translation: string, label: string): void {

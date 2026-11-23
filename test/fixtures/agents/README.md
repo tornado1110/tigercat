@@ -4,11 +4,11 @@ Each file in this directory describes how a scripted ACP stub (`test/stub-agent`
 should behave for one failure or success mode. The files are data. They are
 not a test report, and they do not include results.
 
-`test/stub-agent.ts` does not read these files. No integration test loads
-them. Checking the JSON in does not run the 12 scenarios and does not
-complete issue #24. That issue is still open: `ask-input`, `slow-stream`,
-`huge-output`, and `no-session-load` are not wired into stdio integration
-tests. These files are not a Claude Code, Codex, or Feishu end-to-end run.
+`test/stub-agent.ts` does not read these files. The stdio integration suite
+executes the hardcoded scenarios named `ask-input`, `slow-stream`, and
+`huge-output`; the JSON files remain protocol documentation. The
+`no-session-load` restart path is still pending. These files are not a Claude
+Code, Codex, or Feishu end-to-end run.
 
 TigerCat talks to Workers as an ACP client. These scenarios use ACP v1 method
 and field names from the [Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/overview):

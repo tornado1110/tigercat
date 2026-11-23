@@ -106,7 +106,13 @@ function compileMatch(match: RuleMatch | undefined, label: string): void {
 
 function compileRulePattern(pattern: string, label: string): void {
   const { flags, body } = splitFlags(pattern);
-  normalizePattern(body, flags.includes("u"), label);
+  const normalized = normalizePattern(body, flags.includes("u"), label);
+  try {
+    new RegExp(normalized, flags);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new TigerError("invalid_config", `rule ${label}: invalid regular expression (${message})`);
+  }
 }
 
 function oneOf(expected: string | string[], actual: string): boolean {

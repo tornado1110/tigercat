@@ -36,7 +36,16 @@ function walk(dir) {
 
 function translations() {
   const files = README_NAMES.map((name) => join(root, name));
-  for (const lang of LANGS) files.push(...walk(join(root, "docs", "i18n", lang)));
+  const expectedDocs = new Set();
+  for (const lang of LANGS) {
+    for (const file of walk(join(root, "docs", "i18n", lang))) {
+      expectedDocs.add(relative(join(root, "docs", "i18n", lang), file));
+    }
+  }
+  for (const lang of LANGS) {
+    const directory = join(root, "docs", "i18n", lang);
+    for (const relativeFile of expectedDocs) files.push(join(directory, relativeFile));
+  }
   return files.sort();
 }
 
