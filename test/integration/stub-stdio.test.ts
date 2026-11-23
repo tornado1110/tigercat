@@ -3,7 +3,12 @@ import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { startStdioEngine, waitForEvent } from "../harness/stdio-engine.js";
+import { SystemClock } from "../../src/clock.js";
+import { defaultConfig } from "../../src/config.js";
+import { Engine } from "../../src/engine.js";
+import { ProcessRuntimeFactory } from "../../src/runtime.js";
+import { SqliteStore } from "../../src/store.js";
+import { startStdioEngine, stubRuntime, waitForEvent } from "../harness/stdio-engine.js";
 
 const roots: string[] = [];
 
@@ -338,6 +343,48 @@ describe("real stdio stub-agent", () => {
     expect(end.payload.stopReason).toBe("end_turn");
     await harness.engine.close();
     await harness.store.close();
+  });
+
+  it("no-session-load: restart marks the worker abnormal and routes the next event", async () => {
+    const first = await startStdioEngine("no-session-load");
+    roots.push(first.root);
+    const db = path.join(first.root, "state.sqlite");
+    const spawned = await first.engine.spawn({
+      runtime: "no-session-load",
+      prompt: "persist this",
+      threads: ["feishu:eng:cli"],
+    });
+    await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+    await first.engine.close();
+    await first.store.close();
+
+    const secondStore = SqliteStore.open(db);
+    const config = defaultConfig();
+    config.defaultWorkerRuntime = "no-session-load";
+    config.runtimes = [stubRuntime("no-session-load")];
+    const second = new Engine({
+      store: secondStore,
+      clock: new SystemClock(),
+      config,
+      factory: new ProcessRuntimeFactory({ handshakeTimeoutMs: 8_000 }),
+      workspaceRoot: first.root,
+    });
+    await second.start();
+    const recovered = await second.store.getSession(spawned.workerId);
+    expect(recovered?.state).toBe("interrupted");
+    expect(await second.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(0);
+    const follow = await second.ingest({
+      source: "feishu",
+      thread: "feishu:eng:cli",
+      author: "keith",
+      text: "continue after restart",
+      kind: "im.message",
+      timestamp: Date.now(),
+    });
+    expect(follow.deliveredTo).not.toContain(spawned.workerId);
+    expect(follow.router).toBe(true);
+    await second.close();
+    await secondStore.close();
   });
 
   it("huge-output: caps the stored turn summary", async () => {
