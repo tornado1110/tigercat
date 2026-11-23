@@ -80,25 +80,25 @@ const schemas: Record<string, ReturnType<typeof z.object> | undefined> = {
 function describe(name: string): string {
   switch (name) {
     case "spawn":
-      return "Start a Worker immediately. Returns status=started. Does not wait for the task.";
+      return "Start a Worker. Returns immediately with its id.";
     case "resume":
-      return "Explicitly resume an interrupted Worker on its existing worktree with new input. Never replays the old prompt.";
+      return "Resume an interrupted Worker on its existing worktree.";
     case "list":
-      return "List Workers.";
+      return "List Workers and states.";
     case "send":
-      return "Queue input to a Worker. Returns started.";
+      return "Send follow-up input to a Worker.";
     case "read":
-      return "Read a Worker, Trigger, or Thread summary, or an event by id. Read a worker.turn_end event ID for its full final text. since skips already-seen event seqs.";
+      return "Read Worker state or events. Use a worker.turn_end id for the full result.";
     case "interrupt":
-      return "Cancel the Worker's current turn (ACP session/cancel). Keeps Thread subscriptions and the worktree.";
+      return "Cancel the current Worker turn. Keeps its worktree and subscriptions.";
     case "wait":
-      return "Wait until Workers settle or the timeout expires, then use read to inspect their results.";
+      return "Wait for Workers to settle, then read their results.";
     case "kill":
-      return "Release every Thread subscription, end the session, and keep the worktree for attach.";
+      return "End a Worker and release subscriptions. Keeps its worktree.";
     case "subscribe":
-      return "Subscribe a Worker to a Thread.";
+      return "Route future messages from a Thread to a Worker.";
     case "unsubscribe":
-      return "Unsubscribe a Worker from a Thread.";
+      return "Stop routing a Thread to a Worker.";
     default:
       return name;
   }

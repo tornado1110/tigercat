@@ -130,7 +130,7 @@ export async function createPluginHost(options: PluginOptions): Promise<PluginHo
     });
     server = createMcpServer({ port: ipc.port, token: ipc.token, role: "router" });
     server.registerTool("runtimes", {
-      description: "List registered Worker runtimes and their permission policy. The current Codex conversation supplies routing; no separate Router model runs. Workers using permission=ask request approval from the connected host.",
+      description: "List Worker runtimes and permission policies.",
       inputSchema: z.object({}),
     }, async () => ({ content: [{ type: "text", text: JSON.stringify(listRuntimes(options.config).map((runtime) => ({
       ...runtime,
@@ -173,15 +173,15 @@ function registerLarkTools(server: McpServer, store: SqliteStore): void {
   if (!lark) return;
   const personal = () => new PersonalResourceTracker({ source: new LarkResourceSource(lark), store, clock: new SystemClock() });
   server.registerTool("lark_status", {
-    description: "Read the bound lark-cli user authorization status. Bot readiness does not count as user authorization.",
+    description: "Read the bound Lark user authorization status.",
     inputSchema: z.object({}),
   }, async () => ({ content: [{ type: "text", text: JSON.stringify(await lark.status()) }] }));
   server.registerTool("lark_discover", {
-    description: "Read one lark-cli capability contract on demand; omit skill to list available skills.",
+    description: "Inspect a Lark capability contract. Omit skill to list capabilities.",
     inputSchema: z.object({ skill: z.string().optional() }),
   }, async ({ skill }) => ({ content: [{ type: "text", text: JSON.stringify(await lark.discover(skill)) }] }));
   server.registerTool("lark_execute", {
-    description: "Execute a trusted lark-cli business command with the fixed bound user profile. Use effect=write only for an explicit user-authorized mutation; unknown write outcomes are never retried.",
+    description: "Run a Lark command with the bound user. Writes require user approval.",
     inputSchema: z.object({ args: z.array(z.string()), effect: z.enum(["read", "write"]), expectedRevision: z.string().optional() }),
   }, async ({ args, effect, expectedRevision }) => {
     const invalid = validateLarkCliArguments(args);
@@ -210,7 +210,7 @@ function registerLarkTools(server: McpServer, store: SqliteStore): void {
   });
   const larkParam = z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number(), z.boolean()]))]);
   server.registerTool("lark_api", {
-    description: "Call a structured Lark Open API path through the bound user profile. GET is read-only; other methods require host confirmation.",
+    description: "Call a Lark Open API path. GET is read-only; other methods require approval.",
     inputSchema: z.object({
       method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
       path: z.string(),
@@ -244,28 +244,28 @@ function registerLarkTools(server: McpServer, store: SqliteStore): void {
     return { content: [{ type: "text", text: JSON.stringify(await lark.api(request as LarkApiRequest)) }] };
   });
   server.registerTool("personal_resources_scan", {
-    description: "Search an authorized personal source for resources and return candidates for local confirmation. Supported Lark sources include documents, mail, minutes, and messages. This never sends messages or edits source data.",
+    description: "Find resources in an authorized Lark source for local tracking.",
     inputSchema: z.object({ source: z.string().min(1), query: z.string().optional(), sinceDays: z.number().int().positive().max(3650).optional(), limit: z.number().int().positive().max(50).optional() }),
   }, async ({ source, query, sinceDays, limit }) => {
     const result = await personal().scan({ source, query, sinceDays, limit });
     return { content: [{ type: "text", text: JSON.stringify({ ...result, markdown: resourceScanMarkdown(result) }) }] };
   });
   server.registerTool("personal_resources_confirm", {
-    description: "Confirm resource ids from the latest scan for local tracking. Confirmation reads each resource once to save a local baseline and never writes to the source.",
+    description: "Start local tracking for resource ids from the latest scan.",
     inputSchema: z.object({ ids: z.array(z.string()).min(1).max(20) }),
   }, async ({ ids }) => {
     const tracked = await personal().confirm(ids);
     return { content: [{ type: "text", text: JSON.stringify({ tracked, count: tracked.length }) }] };
   });
   server.registerTool("personal_resources_refresh", {
-    description: "Re-read locally tracked resources and report changes that need the user's judgment. This never sends messages or edits source data.",
+    description: "Refresh tracked resources and report changes.",
     inputSchema: z.object({}),
   }, async () => {
     const result = await personal().refresh();
     return { content: [{ type: "text", text: JSON.stringify({ ...result, markdown: resourceScanMarkdown(result) }) }] };
   });
   server.registerTool("personal_resources_list", {
-    description: "List locally tracked resources and their stable ids.",
+    description: "List locally tracked resources.",
     inputSchema: z.object({}),
   }, async () => {
     const tracked = await personal().list();
