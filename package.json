@@ -45,9 +45,9 @@
     "docs:i18n-check": "node scripts/i18n-check.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.108.0",
-    "@agentclientprotocol/codex-acp": "2.7.0",
-    "@agentclientprotocol/sdk": "2.7.0",
+    "@agentclientprotocol/claude-agent-acp": "0.109.0",
+    "@agentclientprotocol/codex-acp": "2.8.0",
+    "@agentclientprotocol/sdk": "2.8.0",
     "@larksuiteoapi/node-sdk": "1.76.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "smol-toml": "1.9.1",
@@ -56,9 +56,9 @@
   "devDependencies": {
     "@types/node": "22.19.21",
     "eslint": "9.39.1",
-    "tsx": "4.20.6",
+    "tsx": "4.23.15",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.48.1",
+    "typescript-eslint": "8.73.0",
     "vitest": "4.0.8"
   }
 }
