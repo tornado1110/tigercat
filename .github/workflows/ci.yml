@@ -26,7 +26,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - name: acp-tck v0.4.0 (win32 killpg teardown is unverified, not a pass)
         id: tck
         run: npm run test:tck
