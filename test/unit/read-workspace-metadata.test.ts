@@ -49,6 +49,8 @@ describe("read() workspace metadata", () => {
 
       git(worktree, ["mv", "old-name.txt", "new name.txt"]);
       writeFileSync(path.join(worktree, "my file.txt"), "space\n");
+      const arrowName = process.platform === "win32" ? "literal - arrow.txt" : "literal -> arrow.txt";
+      writeFileSync(path.join(worktree, arrowName), "arrow\n");
       // One code point, so macOS normalization does not change the path git reports.
       writeFileSync(path.join(worktree, "π.txt"), "unicode\n");
       const quotedName = "say \"hi\".txt";
@@ -81,12 +83,12 @@ describe("read() workspace metadata", () => {
         "committed.txt",
         "new name.txt",
         "my file.txt",
+        arrowName,
         "π.txt",
       ];
       if (process.platform !== "win32") expected.push(quotedName);
 
       expect(new Set(summary.changedFiles)).toEqual(new Set(expected));
-      expect(summary.changedFiles.some((filePath) => filePath.includes("->") || filePath.startsWith("\""))).toBe(false);
       expect(summary.branch).toBe("worker-feature");
       expect(summary.links).toEqual([
         "https://example.com/change",
