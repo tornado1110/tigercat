@@ -1115,6 +1115,7 @@ export class Engine {
     const awaitingInput = deriveAwaitingInput(stopReason, text);
     const next: SessionState = awaitingInput ? "awaiting_input" : "idle";
     await this.transition(workerId, next);
+    if (this.closed || live.suppressExit) return;
     const summary = spill(text || stopReason, {
       event: "worker.turn_end",
       workerId,

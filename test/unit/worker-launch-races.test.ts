@@ -412,6 +412,43 @@ describe("Worker launch and prompt races", () => {
     }
   });
 
+  it("rejects the turn's state write while kill is waiting for process shutdown", async () => {
+    const { engine, store, handle, workerId } = await fixture();
+    await until(() => handle.prompts.length === 1);
+    const releaseWrite = deferred<void>();
+    const writeStarted = deferred<void>();
+    const stateAfterWrite = deferred<string | undefined>();
+    const releaseKill = deferred<void>();
+    const killStarted = deferred<void>();
+    const updateSession = store.updateSession.bind(store);
+    vi.spyOn(store, "updateSession").mockImplementation(async (id, patch, guard) => {
+      if (id !== workerId || patch.state !== "idle") return updateSession(id, patch, guard);
+      writeStarted.resolve();
+      await releaseWrite.promise;
+      await updateSession(id, patch, guard);
+      stateAfterWrite.resolve((await store.getSession(workerId))?.state);
+    });
+    vi.spyOn(handle, "kill").mockImplementationOnce(async () => {
+      killStarted.resolve();
+      await releaseKill.promise;
+    });
+
+    handle.complete("end_turn", "late result");
+    await writeStarted.promise;
+    const killing = engine.kill(workerId);
+    try {
+      await killStarted.promise;
+      releaseWrite.resolve();
+      expect(await stateAfterWrite.promise).toBe("running");
+    } finally {
+      releaseWrite.resolve();
+      releaseKill.resolve();
+      await killing;
+    }
+    expect((await store.getSession(workerId))?.state).toBe("killed");
+    expect((await engine.events()).some((event) => event.type === "worker.turn_end")).toBe(false);
+  });
+
   it("clears a kill request so a later resume can leave interrupted", async () => {
     const first = await fixture();
     await until(() => first.handle.prompts.length === 1);
