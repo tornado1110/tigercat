@@ -10,7 +10,7 @@ TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。独�
 
 调度者负责路由和对话，每个 Worker 负责一个任务，订阅 Thread，再回报执行结果。独立模式由 TigerCat Router 调度，插件模式由当前 Codex 会话调度。
 
-插件模式下，当前 Codex 会话的原生 Shell、编辑和写文件工具由 Codex 控制。TigerCat 的 MCP 服务注册自己的工具，不能检查或移除 Codex 的原生工具。TigerCat 的 Skill 引导主会话把实现交给 Worker。Worker 权限策略约束 TigerCat 启动的 Worker，主会话直接调用工具时遵循 Codex 宿主设置。
+插件模式下，当前 Codex 会话的原生 Shell、编辑和写文件工具由 Codex 控制。TigerCat 的 MCP 服务注册自己的工具，不能检查或移除 Codex 的原生工具。这些工具仍在 Router 的有效工具集里时，插件进程拒绝启动，也不会退到更松的权限模式。这不是工具隔离，M0 也没有通过。TigerCat 的 Skill 引导主会话把实现交给 Worker。Worker 权限策略约束 TigerCat 启动的 Worker，主会话直接调用工具时遵循 Codex 宿主设置。
 
 本仓库是第 1 周的可行性骨架，还不是完成的 M0。真实的 Claude Code / Codex 会话、一次飞书往返、用真实模型担任 Router，以及「某个厂商的 harness 没有原生 shell 或编辑工具」这一证明，都尚未验证。CI 通过 stdio stub 驱动 `claude-code` 和 `codex` 这两个 profile。真实二进制的手动命令见下文。TigerCat 自己的 MCP 目录不收录那些工具，这并不能说明下游 agent 自己带了哪些工具。跨频道进入和共享 PR 进入属于 M1，不是这个骨架的范围。
 
@@ -35,9 +35,9 @@ tigercat runtime test codex
 
 生成的 `plugins/codex/` 包含插件清单、Skill、本地 MCP 服务和生产依赖，可整体复制分发。按 [Codex 插件文档](https://developers.openai.com/plugins/build/plugins) 将它添加为本地插件源；本仓库不修改全局 Codex 配置，也不自动安装插件。
 
-同一目录里的 `server/cli.js plugin` 是普通 MCP 入口，也可由 Claude Code 或其他 MCP 宿主启动；将其工作目录设为插件根目录，跨机器时用绝对路径。`.codex-plugin` 清单只负责 Codex 的安装发现，Worker/ACP 核心不依赖特定宿主。
+同一目录里的 `server/cli.js plugin` 是 MCP 入口，工作目录是插件根目录。Codex、Claude Code 或其他宿主拉起它时，进程会拒绝启动，原因见上文。`.codex-plugin` 清单只负责 Codex 的安装发现，Worker/ACP 核心不依赖特定宿主。
 
-当前 Codex 会话可以调用 `runtimes`、`spawn`、`resume`、`list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe` 和 `unsubscribe`；配置 Lark 绑定后还会出现 `lark_status`、`lark_discover` 和 `lark_execute`。对仓库检查、编码、测试、调查和持续任务，主会话应主动调度 Worker，不需要用户额外说“使用 TigerCat”。解释、澄清和闲聊由主会话直接处理，外部副作用仍需用户确认。`spawn` 必须带用户项目的绝对 `cwd`；`wait` 每次最多 30 秒。插件启动目录是安装目录，不能据此推断项目路径。Worker 的实际编程能力仍来自所选 ACP runtime。
+协调工具契约包括 `runtimes`、`spawn`、`resume`、`list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe` 和 `unsubscribe`；配置 Lark 绑定后契约里还会出现 `lark_status`、`lark_discover` 和 `lark_execute`。这不是当前已经暴露的工具面。对仓库检查、编码、测试、调查和持续任务，主会话应主动调度 Worker，不需要用户额外说“使用 TigerCat”。解释、澄清和闲聊由主会话直接处理，外部副作用仍需用户确认。`spawn` 必须带用户项目的绝对 `cwd`；`wait` 每次最多 30 秒。插件启动目录是安装目录，不能据此推断项目路径。Worker 的实际编程能力仍来自所选 ACP runtime。
 
 Worker 的 `permission = "ask"` 会通过 MCP elicitation 交给当前 Codex 宿主审批；宿主不支持审批 UI 或用户拒绝时，Worker 只会取消，TigerCat 不会自动放行。插件还提供可选的本地 `lark-cli` capability（需宿主显式配置绑定），用于按 profile 读取授权状态、按需发现能力和执行用户明确授权的业务命令；未知写入结果不会盲重试。
 

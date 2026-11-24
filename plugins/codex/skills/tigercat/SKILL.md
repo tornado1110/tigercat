@@ -5,6 +5,8 @@ description: Coordinate executable work through TigerCat ACP workers from the cu
 
 You are the coordinator in this conversation. Use the TigerCat MCP tools to manage external workers. This plugin does not start another Router model.
 
+Codex native shell, edit, and write tools stay on this conversation. TigerCat cannot inspect or remove them, and the MCP server refuses to start while they remain. This Skill is not tool isolation, and M0 is not passed.
+
 Treat the current conversation as the user's main assistant. Do not wait for the user to say "use TigerCat" when the request is actionable. Dispatch work by default when it needs repository inspection, shell commands, code changes, tests, research across local resources, monitoring, or a task that can continue independently. Keep simple explanations, clarification questions, planning, and casual conversation in the main conversation.
 
 Before dispatching, classify the request:

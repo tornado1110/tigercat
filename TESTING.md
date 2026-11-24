@@ -72,7 +72,7 @@ This tree is a feasibility skeleton. It does not complete M0.
 | Rule filter, subscription routing, `spawn` returns Started, sqlite restart | skeleton | implemented and tested with fakes plus stdio stubs |
 | Real Claude Code / Codex dual harness | M0 | ACP client and both profiles are implemented. CI sends one prompt to each profile through the stdio stub (`test/integration/builtin-runtimes.test.ts`). Real binaries were not executed. Manual: `TIGERCAT_CLAUDE_BIN=/path/to/claude tigercat runtime test claude-code` and `TIGERCAT_CODEX_BIN=/path/to/codex tigercat runtime test codex` |
 | Feishu via cc-connect | M0 | not run |
-| Real model as the Router, native shell/edit isolation inside that harness | M0 | not run. TigerCat's MCP list is not evidence about the vendor's own tools |
+| Real model as the Router, native shell/edit isolation inside that harness | M0 | not passed. Codex plugin mode cannot inspect or remove native shell, edit, or write tools, so `tigercat plugin` refuses to start. That refusal is not tool isolation. TigerCat's MCP list is not evidence about the vendor's own tools |
 | Cross-channel continuity and a shared PR feeding two Workers | M1 | not implemented. The scripted brain subscribes only the Threads passed to `spawn` |
 | GitHub / CI event ingress | M1 | not implemented. `ci.result` rules exist so a future ingress can use them |
 

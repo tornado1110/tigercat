@@ -19,6 +19,7 @@ import { LocalLarkCli, validateLarkCliArguments, type LarkCliBinding } from "./l
 import { LocalLarkTransport, MockLarkTransport, validateLarkApiRequest, type LarkApiRequest, type LarkTransport } from "./lark-transport.js";
 import { redactText } from "./redact.js";
 import { LarkResourceSource, PersonalResourceTracker, resourceScanMarkdown } from "./personal-resources.js";
+import { assertRouterSessionMayStart, codexPluginRouterSurface } from "./plugin-boundary.js";
 
 export interface PluginOptions {
   config: AppConfig;
@@ -36,10 +37,15 @@ export interface PluginHost {
 }
 
 /**
- * The connected Codex session is the Router. This process owns Workers and
- * their event history; it never starts a coordinator or calls a Router model.
+ * The connected host session is the Router. This process would own Workers
+ * and their event history; it never starts a coordinator or calls a Router model.
+ *
+ * Codex plugin mode cannot inspect or remove the host's native shell, edit,
+ * and write tools. Startup refuses while those tools remain in the Router's
+ * effective set. It does not fall back to a looser permission mode.
  */
 export async function createPluginHost(options: PluginOptions): Promise<PluginHost> {
+  assertRouterSessionMayStart(codexPluginRouterSurface());
   const temporaryRoot = options.dbPath ? undefined : await mkdtemp(path.join(tmpdir(), "tigercat-plugin-"));
   const dbPath = options.dbPath ? path.resolve(options.dbPath) : path.join(temporaryRoot!, "state.sqlite");
   const lockPath = `${dbPath}.plugin-lock`;
