@@ -39,6 +39,9 @@ describe("read() workspace metadata", () => {
       const session = await harness.store.getSession(spawned.workerId);
       if (!session?.cwd || !session.baseCwd) throw new Error("worker workspace was not recorded");
       const worktree = session.cwd;
+      expect(await harness.engine.read(spawned.workerId)).toMatchObject({
+        branch: `tigercat/${spawned.workerId}`,
+      });
 
       writeFileSync(path.join(worktree, "committed.txt"), "committed\n");
       git(worktree, ["add", "committed.txt"]);

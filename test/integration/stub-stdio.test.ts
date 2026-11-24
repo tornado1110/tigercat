@@ -133,9 +133,10 @@ describe("real stdio stub-agent", () => {
   it("ok: handshake, agent_message_chunk, and end_turn", async () => {
     const harness = await startStdioEngine("ok");
     roots.push(harness.root);
+    const reportedPull = "https://github.com/example/project/pull/42";
     const spawned = await harness.engine.spawn({
       runtime: "ok",
-      prompt: "say hello",
+      prompt: `Completed in ${reportedPull}?example=1`,
       threads: ["feishu:eng:cli"],
     });
     expect(spawned.status).toBe("started");
@@ -146,6 +147,7 @@ describe("real stdio stub-agent", () => {
     expect(update.workerId).toBe(spawned.workerId);
     const end = await waitForEvent(harness.engine, (event) => event.type === "worker.turn_end");
     expect(end.payload.stopReason).toBe("end_turn");
+    expect(await harness.engine.read(spawned.workerId)).toMatchObject({ links: [reportedPull] });
     expect(await harness.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(1);
     await harness.engine.close();
     await harness.store.close();

@@ -87,8 +87,15 @@ function linksFromEvents(events: TigerEvent[]): string[] {
     if (Array.isArray(values)) {
       for (const value of values) if (typeof value === "string" && value.length > 0) links.add(value);
     }
+    if (event.type === "worker.turn_end" && typeof event.payload.text === "string") {
+      for (const link of event.payload.text.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+\b/g)) {
+        links.add(link[0]);
+        if (links.size >= 20) break;
+      }
+    }
+    if (links.size >= 20) break;
   }
-  return [...links];
+  return [...links].slice(0, 20);
 }
 
 async function gitOutput(args: string[]): Promise<string> {
