@@ -13,6 +13,10 @@ TigerCat은 [Agent Client Protocol](https://agentclientprotocol.com) 위에 있�
 
 플러그인 모드에서는 현재 Codex 세션의 네이티브 셸, 편집, 파일 쓰기 도구를 Codex가 제어합니다. TigerCat의 MCP 서버는 자신의 도구를 등록하며, Codex의 네이티브 도구를 검사하거나 제거할 수 없습니다. 셸, 편집, 쓰기가 Router의 유효 도구 집합에 남아 있는 동안 플러그인 프로세스는 시작을 거부하며, 더 느슨한 권한 모드로 물러나지 않습니다. 이것은 도구 격리가 아니며 M0도 통과하지 않았습니다. TigerCat의 Skill은 메인 세션이 구현을 Worker에게 맡기도록 안내합니다. Worker 권한 정책은 TigerCat이 시작한 Worker를 제약하고, 메인 세션이 도구를 직접 쓸 때는 Codex 호스트 설정을 따릅니다.
 
+같은 디렉터리의 `server/cli.js plugin`은 MCP 진입점이고, 작업 디렉터리는 플러그인 루트입니다. Codex, Claude Code 또는 다른 호스트가 이것을 띄우면 프로세스는 시작을 거부합니다. 이유는 위에 있습니다. `.codex-plugin` 매니페스트는 Codex가 설치를 찾게 할 뿐이며, Worker/ACP 핵심은 특정 호스트에 의존하지 않습니다.
+
+조정 도구 계약에는 `runtimes`, `spawn`, `resume`, `list`, `send`, `read`, `interrupt`, `wait`, `kill`, `subscribe`, `unsubscribe`이 포함됩니다. Lark 바인딩을 설정하면 계약에 `lark_status`, `lark_discover`, `lark_execute`도 들어갑니다. 이것은 지금 노출된 도구 면이 아닙니다. 저장소 조사, 구현, 테스트, 지속 작업은 사용자가 "TigerCat을 써"라고 말하기 전에 메인 세션이 Worker에게 넘깁니다. 설명, 확인, 잡담은 메인 세션이 직접 처리합니다. 외부 부작용은 여전히 사용자 확인이 필요합니다. `spawn`에는 사용자 프로젝트의 절대 `cwd`가 있어야 합니다. `wait`는 한 번에 최대 30초입니다. 플러그인 시작 디렉터리는 설치 위치이며, 그것으로 프로젝트 경로를 알 수 없습니다. Worker의 실제 코딩 능력은 선택한 ACP runtime에서 옵니다.
+
 이 저장소는 1주차 타당성 골격입니다. 완성된 M0이 아닙니다. 실제 Claude Code / Codex 세션, Feishu 왕복, 실제 모델을 Router로 쓰는 것, 그리고 벤더 harness에 네이티브 shell이나 편집 도구가 없다는 증명은 모두 아직 검증되지 않았습니다. CI는 stdio stub으로 `claude-code`와 `codex` 프로필을 구동합니다. 실제 바이너리용 수동 명령은 아래에 있습니다. TigerCat 자신의 MCP 카탈로그가 그 도구를 넣지 않는다고 해서, 다운스트림 agent가 스스로 가진 도구가 무엇인지를 말해 주지는 않습니다. 채널을 넘는 진입과 공유 PR 진입은 M1이며, 이 골격의 범위가 아닙니다.
 
 ## 빠른 시작
