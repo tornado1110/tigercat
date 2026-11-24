@@ -37,18 +37,6 @@ import { prepareWorkspace, type Workspace } from "./worktree.js";
 const execFileAsync = promisify(execFile);
 const GIT_OUTPUT_MAX_BUFFER = 1024 * 1024;
 
-const GIT_SIMPLE_ESCAPES: Record<string, string> = {
-  "\\": "\\",
-  "\"": "\"",
-  n: "\n",
-  t: "\t",
-  r: "\r",
-  a: "\u0007",
-  b: "\b",
-  f: "\f",
-  v: "\v",
-};
-
 async function workspaceDetails(session: SessionRecord, events: TigerEvent[]): Promise<{
   changedFiles: string[];
   branch: string | null;
@@ -56,12 +44,11 @@ async function workspaceDetails(session: SessionRecord, events: TigerEvent[]): P
 }> {
   const changedFiles = new Set(session.paths);
   const links = linksFromEvents(events);
-  if (!session.cwd) return { changedFiles: [...changedFiles], branch: null, links };
+  if (!session.cwd || !session.worktree) return { changedFiles: [...changedFiles], branch: null, links };
   try {
     const status = await gitOutput([
       "-C", session.cwd,
-      "-c", "core.quotepath=true",
-      "status", "--short",
+      "status", "--porcelain=v1", "-z", "--untracked-files=all",
     ]);
     for (const filePath of porcelainStatusPaths(status)) changedFiles.add(filePath);
   } catch {
@@ -105,7 +92,7 @@ function linksFromEvents(events: TigerEvent[]): string[] {
 }
 
 async function gitOutput(args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER });
+  const { stdout } = await execFileAsync("git", args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, timeout: 5_000 });
   return stdout;
 }
 
@@ -114,92 +101,21 @@ async function committedPathsSinceBase(cwd: string, baseCwd: string): Promise<st
   if (!baseHead) return [];
   const mergeBase = (await gitOutput(["-C", cwd, "merge-base", "HEAD", baseHead])).trim();
   if (!mergeBase) return [];
-  const diff = await gitOutput(["-C", cwd, "diff", "-z", "-M", "--name-only", mergeBase]);
+  const diff = await gitOutput(["-C", cwd, "diff", "-z", "-M", "--name-only", mergeBase, "HEAD", "--"]);
   return diff.split("\0").filter((filePath) => filePath.length > 0);
 }
 
-/** `git status --short` paths. Renames contribute the destination. Quoted paths are unescaped. */
+/** Porcelain v1 with -z emits raw paths, with the destination first for renames. */
 function porcelainStatusPaths(stdout: string): string[] {
+  const entries = stdout.split("\0");
   const paths: string[] = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    if (line.length < 4) continue;
-    const filePath = statusPath(line.slice(3));
-    if (filePath) paths.push(filePath);
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry.length < 4) continue;
+    paths.push(entry.slice(3));
+    if (/[RC]/.test(entry.slice(0, 2))) index += 1;
   }
   return paths;
-}
-
-function statusPath(field: string): string | undefined {
-  const tokens = tokenizeStatusField(field);
-  if (tokens.length === 0) return undefined;
-  const arrow = tokens.indexOf("->");
-  if (arrow > 0 && arrow + 1 < tokens.length) return tokens[arrow + 1];
-  return tokens[0];
-}
-
-function tokenizeStatusField(field: string): string[] {
-  const tokens: string[] = [];
-  let index = 0;
-  while (index < field.length) {
-    const ch = field[index];
-    if (ch === " " || ch === "\t") {
-      index += 1;
-      continue;
-    }
-    if (ch === "\"") {
-      const parsed = unquoteGit(field, index);
-      tokens.push(parsed.value);
-      index = parsed.next;
-      continue;
-    }
-    let end = index;
-    while (end < field.length && field[end] !== " " && field[end] !== "\t") end += 1;
-    tokens.push(field.slice(index, end));
-    index = end;
-  }
-  return tokens;
-}
-
-function unquoteGit(input: string, start: number): { value: string; next: number } {
-  const bytes: number[] = [];
-  let index = start + 1;
-  while (index < input.length) {
-    const ch = input[index] ?? "";
-    if (ch === "\"") return { value: Buffer.from(bytes).toString("utf8"), next: index + 1 };
-    if (ch !== "\\") {
-      appendUtf8(bytes, ch);
-      index += 1;
-      continue;
-    }
-    const escaped = input[index + 1];
-    if (escaped === undefined) break;
-    const simple = GIT_SIMPLE_ESCAPES[escaped];
-    if (simple !== undefined) {
-      appendUtf8(bytes, simple);
-      index += 2;
-      continue;
-    }
-    if (escaped >= "0" && escaped <= "7") {
-      let octal = escaped;
-      let cursor = index + 2;
-      while (octal.length < 3 && cursor < input.length) {
-        const digit = input[cursor] ?? "";
-        if (digit < "0" || digit > "7") break;
-        octal += digit;
-        cursor += 1;
-      }
-      bytes.push(Number.parseInt(octal, 8));
-      index = cursor;
-      continue;
-    }
-    appendUtf8(bytes, escaped);
-    index += 2;
-  }
-  return { value: Buffer.from(bytes).toString("utf8"), next: index };
-}
-
-function appendUtf8(bytes: number[], text: string): void {
-  for (const byte of Buffer.from(text, "utf8")) bytes.push(byte);
 }
 
 function ingressFingerprint(input: TriggerInput): string {
