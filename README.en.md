@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
+<!-- i18n-source: README.md @ a23dec63f7e2b04bed4b5ec7ba4fada9120199ee -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # TigerCat
@@ -10,6 +10,8 @@ A Super-agent router for coding agents: one resident ACP router that dispatches 
 TigerCat sits on the [Agent Client Protocol](https://agentclientprotocol.com). Upstream it **is** an ACP agent (`tigercat acp`), so hosts such as cc-connect or Zed can drive it. Downstream it is an ACP client that launches Workers on any registered ACP runtime. Feishu and DingTalk stay in those hosts; TigerCat does not implement IM channels.
 
 It is not a subagent tool. A resident Router only routes and talks to the human. Workers own one task each, subscribe to Threads, and report back to the Router.
+
+In plugin mode, Codex controls the native shell, editing, and file-writing tools in the current Codex session. TigerCat's MCP server registers its own tools and cannot inspect or remove Codex's native tools. TigerCat's Skill asks the main session to delegate implementation to Workers. Worker permission policies constrain Workers launched by TigerCat, and direct tool use in the main session follows Codex host settings.
 
 This repository is a week-1 feasibility skeleton. It is not a completed M0. Real Claude Code / Codex sessions, a Feishu round-trip, a real model as the Router, and proof that a vendor harness has no native shell or edit tools are all still unverified. CI drives the `claude-code` and `codex` profiles through the stdio stub. The manual commands for a real binary are below. TigerCat's own MCP catalog omitting those tools does not say anything about the tools a downstream agent ships itself. Cross-channel and shared-PR ingress are M1, not this skeleton.
 

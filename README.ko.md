@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
+<!-- i18n-source: README.md @ a23dec63f7e2b04bed4b5ec7ba4fada9120199ee -->
 > 간체 중국어판이 기준입니다. 이 번역은 원문보다 늦을 수 있으며, 기계 번역의 도움을 받았습니다. 수정은 환영합니다.
 
 # TigerCat
@@ -10,6 +10,8 @@
 TigerCat은 [Agent Client Protocol](https://agentclientprotocol.com) 위에 있습니다. 업스트림에서 보면 이것**이 곧** ACP agent입니다(`tigercat acp`). 그래서 cc-connect나 Zed 같은 호스트가 이를 구동할 수 있습니다. 다운스트림에서는 ACP 클라이언트이며, 등록된 어떤 ACP runtime에서든 Worker를 띄웁니다. Feishu와 DingTalk은 그 호스트에 남고, TigerCat은 IM 채널을 구현하지 않습니다.
 
 이것은 subagent 도구가 아닙니다. 상주 Router는 라우팅하고 사람과 대화할 뿐입니다. Worker는 작업을 하나씩 맡고, Thread를 구독하고, Router에 결과를 보고합니다.
+
+플러그인 모드에서는 현재 Codex 세션의 네이티브 셸, 편집, 파일 쓰기 도구를 Codex가 제어합니다. TigerCat의 MCP 서버는 자신의 도구를 등록하며, Codex의 네이티브 도구를 검사하거나 제거할 수 없습니다. TigerCat의 Skill은 메인 세션이 구현을 Worker에게 맡기도록 안내합니다. Worker 권한 정책은 TigerCat이 시작한 Worker를 제약하고, 메인 세션이 도구를 직접 쓸 때는 Codex 호스트 설정을 따릅니다.
 
 이 저장소는 1주차 타당성 골격입니다. 완성된 M0이 아닙니다. 실제 Claude Code / Codex 세션, Feishu 왕복, 실제 모델을 Router로 쓰는 것, 그리고 벤더 harness에 네이티브 shell이나 편집 도구가 없다는 증명은 모두 아직 검증되지 않았습니다. CI는 stdio stub으로 `claude-code`와 `codex` 프로필을 구동합니다. 실제 바이너리용 수동 명령은 아래에 있습니다. TigerCat 자신의 MCP 카탈로그가 그 도구를 넣지 않는다고 해서, 다운스트림 agent가 스스로 가진 도구가 무엇인지를 말해 주지는 않습니다. 채널을 넘는 진입과 공유 PR 진입은 M1이며, 이 골격의 범위가 아닙니다.
 

@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
+<!-- i18n-source: README.md @ a23dec63f7e2b04bed4b5ec7ba4fada9120199ee -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # TigerCat
@@ -10,6 +10,8 @@ Un enrutador Super-agent para agentes de código: un enrutador ACP residente que
 TigerCat se apoya en el [Agent Client Protocol](https://agentclientprotocol.com). Hacia arriba, **es** un agente ACP (`tigercat acp`), así que un host como cc-connect o Zed puede dirigirlo. Hacia abajo es un cliente ACP que arranca un Worker en cualquier runtime ACP que esté registrado. Feishu y DingTalk se quedan en esos hosts; TigerCat no implementa canales de mensajería.
 
 No es una herramienta de subagentes. Un Router residente solo enruta y habla con la persona. Cada Worker se ocupa de una tarea, se suscribe a Threads y reporta al Router.
+
+En modo plugin, Codex controla las herramientas nativas de shell, edición y escritura de archivos de la sesión actual de Codex. El servidor MCP de TigerCat registra sus propias herramientas y no puede inspeccionar ni quitar las herramientas nativas de Codex. El Skill de TigerCat pide a la sesión principal que delegue la implementación en Workers. Las políticas de permisos de Worker limitan a los Workers que inicia TigerCat, y el uso directo de herramientas en la sesión principal sigue la configuración del host de Codex.
 
 Este repositorio es un esqueleto de viabilidad de la semana 1. No es un M0 terminado. Siguen sin verificarse las sesiones reales de Claude Code / Codex, un ida y vuelta con Feishu, usar un modelo real como Router, y la prueba de que el harness de un proveedor no tiene shell ni herramientas de edición nativas. CI ejecuta los perfiles `claude-code` y `codex` a través del stub de stdio. Los comandos manuales para un binario real están más abajo. Que el catálogo MCP propio de TigerCat no incluya esas herramientas no dice nada sobre las herramientas que un agente posterior trae por su cuenta. La entrada entre canales y la de un PR compartido son M1, no de este esqueleto.
 
