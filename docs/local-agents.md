@@ -15,10 +15,11 @@ adapter 完成 `initialize`、`session/new` 和 `session/prompt`。没有厂商�
 
 ## 在 Codex 中使用
 
-构建 `plugins/codex/` 后，把整个目录作为本地插件源。仓库内的
-`.agents/plugins/marketplace.json` 已提供 `tigercat-local` marketplace；在支持
-本地 marketplace 的 Codex 客户端中选择 TigerCat 并启用。插件的 `runtimes` 工具
-会返回本机 Claude Code/Codex 的发现结果，`spawn` 使用当前项目的绝对 `cwd`。
+`node server/cli.js plugin` 会拒绝启动。Codex 插件模式的 Router 会话仍带有宿主原生的 shell、编辑和写文件工具，TigerCat 不能检查或移除它们，因此进程不会启动，也不会改用更松的权限模式。这不是工具隔离，M0 没有通过。
+
+构建 `plugins/codex/` 后，可以把整个目录作为本地插件源。仓库内的
+`.agents/plugins/marketplace.json` 已提供 `tigercat-local` marketplace。启用后
+MCP 进程仍会拒绝启动，`runtimes` 和 `spawn` 不会对当前会话暴露。
 
 也可以直接把 MCP 服务注册到当前 Codex 配置：
 
@@ -38,19 +39,20 @@ claude mcp add --scope user tigercat -- node \
 claude mcp list
 ```
 
-这条路径让 Claude Code 作为当前会话的 Router 使用 TigerCat；TigerCat 仍可在
-Worker runtime 中启动另一个 Claude Code 或 Codex。两层角色通过独立 MCP token
+同一 MCP 入口也会拒绝启动。Claude Code 会话同样自带原生 shell、编辑和写文件工具，TigerCat 不能检查或移除它们。拒绝启动不是工具隔离。
+
+Worker runtime 仍可在独立模式里启动另一个 Claude Code 或 Codex。两层角色通过独立 MCP token
 隔离。
 
 ## 飞书 mock
 
-还没有真实发送时，可以显式打开进程内 mock：
+插件进程会在注册 Lark 工具之前拒绝启动，因此下面的命令现在也不会进入 mock。宿主不能证明原生 shell、编辑和写文件工具已经从 Router 会话拿掉时，`TIGERCAT_LARK_MOCK=1` 不会让启动继续。
 
 ```bash
 TIGERCAT_LARK_MOCK=1 node plugins/codex/server/cli.js plugin
 ```
 
-mock 提供 `lark_status`、`lark_discover`、`lark_execute` 和 `lark_api`。GET
+若进程能够启动，mock 提供 `lark_status`、`lark_discover`、`lark_execute` 和 `lark_api`。GET
 以及 read 调用返回确定性 fixture；POST/PUT/PATCH/DELETE 和 write 仍要求宿主
 提供 MCP elicitation，并且只有确认后才会记录 mock 调用。真实 `lark-cli` 只有
 在绑定了 account、profile、credential home 和 revision 后才会出现。

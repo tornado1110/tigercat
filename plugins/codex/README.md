@@ -2,7 +2,7 @@
 
 The current Codex conversation coordinates TigerCat workers through a bundled local MCP server. The plugin starts no separate Router model and needs no Feishu account.
 
-Codex controls the native shell, editing, and file-writing tools in the host conversation. TigerCat's MCP server registers its own tools and cannot inspect or remove Codex's native tools. The plugin Skill asks the main conversation to delegate implementation to Workers, while Codex host settings govern any direct tool use. Worker permission policies apply to Workers launched by TigerCat.
+Codex controls the native shell, editing, and file-writing tools in the host conversation. TigerCat's MCP server registers its own tools and cannot inspect or remove Codex's native tools. `node server/cli.js plugin` therefore refuses to start while shell, edit, or write remains in the Router's effective tool set. It does not fall back to a looser permission mode. This is not tool isolation, and M0 is not passed. The plugin Skill asks the main conversation to delegate implementation to Workers, while Codex host settings govern any direct tool use. Worker permission policies apply to Workers launched by TigerCat.
 
 Build from the TigerCat repository with Node.js 22.13 or later:
 

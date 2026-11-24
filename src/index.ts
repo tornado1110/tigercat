@@ -45,5 +45,13 @@ export { LocalLarkTransport, MockLarkTransport, validateLarkApiRequest } from ".
 export type { LarkTransport, LarkApiRequest, LarkApiMethod, LarkApiPrimitive, LarkMockCall, LarkMockFixtures } from "./lark-transport.js";
 export { LarkResourceSource, PersonalResourceTracker, resourceScanMarkdown } from "./personal-resources.js";
 export type { ResourceCandidate, ResourceChange, ResourceScanResult, ResourceSearch, ResourceSearchResult, ResourceSource, PersonalResourceTrackerOptions, TrackedResource, ResourceStatus } from "./personal-resources.js";
-export { assertNoShellOrEditTools, ROUTER_TOOL_NAMES, WORKER_TOOL_NAMES } from "./tools.js";
+export { assertNoShellOrEditTools, forbiddenRouterToolNames, ROUTER_TOOL_NAMES, WORKER_TOOL_NAMES } from "./tools.js";
+export {
+  assertRouterSessionMayStart,
+  codexPluginRouterSurface,
+  effectiveRouterTools,
+  pluginRouterMcpToolNames,
+  UNPROVEN_HOST_NATIVE_TOOLS,
+} from "./plugin-boundary.js";
+export type { RouterToolSurface } from "./plugin-boundary.js";
 export type { AppConfig, TriggerInput, SpawnRequest } from "./types.js";

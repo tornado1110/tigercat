@@ -454,7 +454,7 @@ A Super-agent router for coding agents.
 Usage:
   tigercat acp [--config file]
   tigercat feishu [connect] [--cwd repo] [--runtime name] [--config file]
-  tigercat plugin [--config file]  MCP tools for a host-driven Codex plugin
+  tigercat plugin [--config file]  refuses to start while native shell/edit/write tools remain
   tigercat personal scan|confirm|refresh|list|close --profile <profile> [--source documents|mail|minutes|messages] [--query text] [ids...]
   tigercat runtime add <name> --command <cmd> [--arg a] [--env K=V] [--tag t] [--permission ask|auto|deny]
     --env is written to config.toml in plaintext. Do not put API keys there.

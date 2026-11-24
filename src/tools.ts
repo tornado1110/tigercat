@@ -25,8 +25,13 @@ export const WORKER_TOOL_NAMES = ["subscribe", "unsubscribe", "read"] as const;
 const SHELL_OR_EDIT =
   /(shell|bash|exec|terminal|edit|write|patch|delete|fs_|strreplace|apply_patch|notebook)/i;
 
+/** Names in `names` that are shell, edit, or write tools. Order is preserved. */
+export function forbiddenRouterToolNames(names: readonly string[]): string[] {
+  return names.filter((name) => SHELL_OR_EDIT.test(name));
+}
+
 export function assertNoShellOrEditTools(names: readonly string[]): void {
-  const bad = names.filter((name) => SHELL_OR_EDIT.test(name));
+  const bad = forbiddenRouterToolNames(names);
   if (bad.length > 0) {
     throw new Error(`router tool list contains shell/edit tools: ${bad.join(", ")}`);
   }
