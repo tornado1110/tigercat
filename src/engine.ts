@@ -35,7 +35,19 @@ import { ROUTER_SESSION_ID } from "./types.js";
 import { prepareWorkspace, type Workspace } from "./worktree.js";
 
 const execFileAsync = promisify(execFile);
+const GIT_OUTPUT_MAX_BUFFER = 1024 * 1024;
 
+const GIT_SIMPLE_ESCAPES: Record<string, string> = {
+  "\\": "\\",
+  "\"": "\"",
+  n: "\n",
+  t: "\t",
+  r: "\r",
+  a: "\u0007",
+  b: "\b",
+  f: "\f",
+  v: "\v",
+};
 
 async function workspaceDetails(session: SessionRecord, events: TigerEvent[]): Promise<{
   changedFiles: string[];
@@ -43,6 +55,41 @@ async function workspaceDetails(session: SessionRecord, events: TigerEvent[]): P
   links: string[];
 }> {
   const changedFiles = new Set(session.paths);
+  const links = linksFromEvents(events);
+  if (!session.cwd) return { changedFiles: [...changedFiles], branch: null, links };
+  try {
+    const status = await gitOutput([
+      "-C", session.cwd,
+      "-c", "core.quotepath=true",
+      "status", "--short",
+    ]);
+    for (const filePath of porcelainStatusPaths(status)) changedFiles.add(filePath);
+  } catch {
+    // A removed or unavailable worktree still returns persisted metadata.
+  }
+  if (session.baseCwd) {
+    try {
+      // A commit inside the worker worktree is clean in `git status` and still
+      // differs from the checkout the worktree was added from. Diff against the
+      // merge-base with baseCwd so later commits on that base are not included.
+      for (const filePath of await committedPathsSinceBase(session.cwd, session.baseCwd)) {
+        changedFiles.add(filePath);
+      }
+    } catch {
+      // No comparable git history. Uncommitted status above still stands.
+    }
+  }
+  let branch: string | null = null;
+  try {
+    const current = (await gitOutput(["-C", session.cwd, "branch", "--show-current"])).trim();
+    branch = current || null;
+  } catch {
+    branch = null;
+  }
+  return { changedFiles: [...changedFiles], branch, links };
+}
+
+function linksFromEvents(events: TigerEvent[]): string[] {
   const links = new Set<string>();
   for (const event of events) {
     for (const key of ["url", "link", "prUrl", "pullRequestUrl"]) {
@@ -54,23 +101,105 @@ async function workspaceDetails(session: SessionRecord, events: TigerEvent[]): P
       for (const value of values) if (typeof value === "string" && value.length > 0) links.add(value);
     }
   }
-  if (!session.cwd) return { changedFiles: [...changedFiles], branch: null, links: [...links] };
-  try {
-    const { stdout } = await execFileAsync("git", ["-C", session.cwd, "status", "--short"], { maxBuffer: 64 * 1024 });
-    for (const line of stdout.split(/\r?\n/)) {
-      const match = line.match(/^..\s+(.+)$/);
-      if (match?.[1]) changedFiles.add(match[1]);
+  return [...links];
+}
+
+async function gitOutput(args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER });
+  return stdout;
+}
+
+async function committedPathsSinceBase(cwd: string, baseCwd: string): Promise<string[]> {
+  const baseHead = (await gitOutput(["-C", baseCwd, "rev-parse", "HEAD"])).trim();
+  if (!baseHead) return [];
+  const mergeBase = (await gitOutput(["-C", cwd, "merge-base", "HEAD", baseHead])).trim();
+  if (!mergeBase) return [];
+  const diff = await gitOutput(["-C", cwd, "diff", "-z", "-M", "--name-only", mergeBase]);
+  return diff.split("\0").filter((filePath) => filePath.length > 0);
+}
+
+/** `git status --short` paths. Renames contribute the destination. Quoted paths are unescaped. */
+function porcelainStatusPaths(stdout: string): string[] {
+  const paths: string[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    if (line.length < 4) continue;
+    const filePath = statusPath(line.slice(3));
+    if (filePath) paths.push(filePath);
+  }
+  return paths;
+}
+
+function statusPath(field: string): string | undefined {
+  const tokens = tokenizeStatusField(field);
+  if (tokens.length === 0) return undefined;
+  const arrow = tokens.indexOf("->");
+  if (arrow > 0 && arrow + 1 < tokens.length) return tokens[arrow + 1];
+  return tokens[0];
+}
+
+function tokenizeStatusField(field: string): string[] {
+  const tokens: string[] = [];
+  let index = 0;
+  while (index < field.length) {
+    const ch = field[index];
+    if (ch === " " || ch === "\t") {
+      index += 1;
+      continue;
     }
-  } catch {
-    // A removed or unavailable worktree still returns persisted metadata.
+    if (ch === "\"") {
+      const parsed = unquoteGit(field, index);
+      tokens.push(parsed.value);
+      index = parsed.next;
+      continue;
+    }
+    let end = index;
+    while (end < field.length && field[end] !== " " && field[end] !== "\t") end += 1;
+    tokens.push(field.slice(index, end));
+    index = end;
   }
-  try {
-    const { stdout } = await execFileAsync("git", ["-C", session.cwd, "branch", "--show-current"], { maxBuffer: 4096 });
-    const branch = stdout.trim();
-    return { changedFiles: [...changedFiles], branch: branch || null, links: [...links] };
-  } catch {
-    return { changedFiles: [...changedFiles], branch: null, links: [...links] };
+  return tokens;
+}
+
+function unquoteGit(input: string, start: number): { value: string; next: number } {
+  const bytes: number[] = [];
+  let index = start + 1;
+  while (index < input.length) {
+    const ch = input[index] ?? "";
+    if (ch === "\"") return { value: Buffer.from(bytes).toString("utf8"), next: index + 1 };
+    if (ch !== "\\") {
+      appendUtf8(bytes, ch);
+      index += 1;
+      continue;
+    }
+    const escaped = input[index + 1];
+    if (escaped === undefined) break;
+    const simple = GIT_SIMPLE_ESCAPES[escaped];
+    if (simple !== undefined) {
+      appendUtf8(bytes, simple);
+      index += 2;
+      continue;
+    }
+    if (escaped >= "0" && escaped <= "7") {
+      let octal = escaped;
+      let cursor = index + 2;
+      while (octal.length < 3 && cursor < input.length) {
+        const digit = input[cursor] ?? "";
+        if (digit < "0" || digit > "7") break;
+        octal += digit;
+        cursor += 1;
+      }
+      bytes.push(Number.parseInt(octal, 8));
+      index = cursor;
+      continue;
+    }
+    appendUtf8(bytes, escaped);
+    index += 2;
   }
+  return { value: Buffer.from(bytes).toString("utf8"), next: index };
+}
+
+function appendUtf8(bytes: number[], text: string): void {
+  for (const byte of Buffer.from(text, "utf8")) bytes.push(byte);
 }
 
 function ingressFingerprint(input: TriggerInput): string {
@@ -663,7 +792,7 @@ export class Engine {
         related: {
           threadId: session.threadId,
           runtime: session.runtime,
-          worktree: session.cwd,
+          cwd: session.cwd,
           baseCwd: session.baseCwd,
         },
       };
