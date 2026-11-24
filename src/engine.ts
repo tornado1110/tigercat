@@ -1329,11 +1329,18 @@ export class Engine {
   }
 
   private async transition(id: string, to: SessionState): Promise<void> {
+    // Checked before the load and again on the row that will be written.
+    // kill() records the id, then waits for the process; a turn that already
+    // passed the first check can still be inside this method.
     if (to !== "killed" && this.killRequested.has(id)) return;
     const session = await this.store.getSession(id);
     if (!session) throw new TigerError("unknown_id", `unknown id ${id}`);
-    assertTransition(session.state, to);
-    await this.store.updateSession(id, { state: to, updatedAt: this.clock.now() });
+    if (to !== "killed" && this.killRequested.has(id)) return;
+    await this.store.updateSession(id, { state: to, updatedAt: this.clock.now() }, (current) => {
+      if (to !== "killed" && this.killRequested.has(id)) return false;
+      assertTransition(current.state, to);
+      return true;
+    });
   }
 
   private async emit(

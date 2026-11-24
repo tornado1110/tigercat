@@ -84,7 +84,16 @@ export interface Store {
   getEvent(id: string): Promise<TigerEvent | undefined>;
 
   insertSession(session: SessionRecord): Promise<void>;
-  updateSession(id: string, patch: Partial<SessionRecord>): Promise<void>;
+  /**
+   * Apply `patch` to the current row. `guard` runs on that row and may
+   * reject the write. The read, guard, and write happen before this method
+   * yields, so a concurrent state change cannot land between them.
+   */
+  updateSession(
+    id: string,
+    patch: Partial<SessionRecord>,
+    guard?: (current: SessionRecord) => boolean,
+  ): Promise<void>;
   getSession(id: string): Promise<SessionRecord | undefined>;
   listSessions(role?: SessionRole): Promise<SessionRecord[]>;
 
@@ -445,35 +454,50 @@ export class SqliteStore implements Store {
       );
   }
 
-  async updateSession(id: string, patch: Partial<SessionRecord>): Promise<void> {
-    const current = await this.getSession(id);
-    if (!current) return;
-    const next: SessionRecord = { ...current, ...patch, id: current.id };
+  updateSession(
+    id: string,
+    patch: Partial<SessionRecord>,
+    guard?: (current: SessionRecord) => boolean,
+  ): Promise<void> {
+    // Await used to sit between the read and the write. Kill could commit
+    // in that gap and this patch would then replace the killed row.
+    const current = this.readSession(id);
+    if (!current) return Promise.resolve();
+    if (guard && !guard(current)) return Promise.resolve();
+    this.writeSession({ ...current, ...patch, id: current.id });
+    return Promise.resolve();
+  }
+
+  private readSession(id: string): SessionRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;
+    return row ? mapSession(row) : undefined;
+  }
+
+  private writeSession(session: SessionRecord): void {
     this.db
       .prepare(
         `UPDATE sessions SET role=?, runtime=?, state=?, cwd=?, worktree=?, base_cwd=?, thread_id=?, acp_session_id=?, pid=?, seq=?, paths=?, created_at=?, updated_at=? WHERE id=?`,
       )
       .run(
-        next.role,
-        next.runtime,
-        next.state,
-        next.cwd,
-        next.worktree ? 1 : 0,
-        next.baseCwd,
-        next.threadId,
-        next.acpSessionId,
-        next.pid,
-        next.seq,
-        JSON.stringify(next.paths),
-        next.createdAt,
-        next.updatedAt,
-        id,
+        session.role,
+        session.runtime,
+        session.state,
+        session.cwd,
+        session.worktree ? 1 : 0,
+        session.baseCwd,
+        session.threadId,
+        session.acpSessionId,
+        session.pid,
+        session.seq,
+        JSON.stringify(session.paths),
+        session.createdAt,
+        session.updatedAt,
+        session.id,
       );
   }
 
   async getSession(id: string): Promise<SessionRecord | undefined> {
-    const row = this.db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;
-    return row ? mapSession(row) : undefined;
+    return this.readSession(id);
   }
 
   async listSessions(role?: SessionRole): Promise<SessionRecord[]> {

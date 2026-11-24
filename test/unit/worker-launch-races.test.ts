@@ -376,6 +376,71 @@ describe("Worker launch and prompt races", () => {
     expect(clock.pending()).toBe(0);
     expect(append).not.toHaveBeenCalled();
   });
+
+  it("does not let an in-flight turn transition replace a kill", async () => {
+    const { engine, store, handle, workerId } = await fixture();
+    await until(() => handle.prompts.length === 1);
+    const readSession = store.getSession.bind(store);
+    const release = deferred<void>();
+    const reading = deferred<void>();
+    let runningReads = 0;
+    vi.spyOn(store, "getSession").mockImplementation(async (id) => {
+      const session = await readSession(id);
+      // The turn loads its current row, then yields before writing the next
+      // state. Hold that loaded row so kill can commit first.
+      if (id === workerId && session?.state === "running") {
+        runningReads += 1;
+        if (runningReads === 2) {
+          reading.resolve();
+          await release.promise;
+          return session;
+        }
+      }
+      return session;
+    });
+    handle.complete("end_turn", "finished the task");
+    try {
+      await reading.promise;
+      await engine.kill(workerId);
+      expect((await readSession(workerId))?.state).toBe("killed");
+      release.resolve();
+      await engine.settle();
+      expect((await readSession(workerId))?.state).toBe("killed");
+      expect(runningReads).toBeGreaterThanOrEqual(2);
+    } finally {
+      release.resolve();
+    }
+  });
+
+  it("clears a kill request so a later resume can leave interrupted", async () => {
+    const first = await fixture();
+    await until(() => first.handle.prompts.length === 1);
+    const cwd = (await first.store.getSession(first.workerId))!.cwd;
+    await first.engine.close();
+    const replacementFactory = new ControlledFactory(false);
+    const replacement = new Engine({
+      store: first.store,
+      clock: first.clock,
+      config: first.engine.config,
+      factory: replacementFactory,
+      workspaceRoot: path.dirname(cwd!),
+    });
+    fixtures.push({ engine: replacement, store: first.store, root: path.dirname(cwd!) });
+    await replacement.start();
+    expect((await first.store.getSession(first.workerId))?.state).toBe("interrupted");
+    vi.spyOn(first.store, "updateSession").mockImplementationOnce(() => {
+      throw new Error("killed write failed");
+    });
+    await expect(replacement.kill(first.workerId)).rejects.toThrow("killed write failed");
+    expect((await first.store.getSession(first.workerId))?.state).toBe("interrupted");
+    vi.mocked(first.store.updateSession).mockRestore();
+
+    const resumed = await replacement.resume(first.workerId, "continue after the abandoned kill");
+    expect(resumed.workerId).toBe(first.workerId);
+    await until(async () => (await first.store.getSession(first.workerId))?.state === "running");
+    expect(replacementFactory.handle.prompts).toEqual(["continue after the abandoned kill"]);
+    expect((await first.store.getSession(first.workerId))?.state).toBe("running");
+  });
 });
 
 describe("Worker result recall", () => {
