@@ -1,6 +1,8 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { access } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import { deriveAwaitingInput } from "./awaiting.js";
 import { AcpRouterBrain, ScriptedRouter, type RouterBrain, type ToolApi } from "./brains.js";
@@ -31,6 +33,45 @@ import type {
 } from "./types.js";
 import { ROUTER_SESSION_ID } from "./types.js";
 import { prepareWorkspace, type Workspace } from "./worktree.js";
+
+const execFileAsync = promisify(execFile);
+
+
+async function workspaceDetails(session: SessionRecord, events: TigerEvent[]): Promise<{
+  changedFiles: string[];
+  branch: string | null;
+  links: string[];
+}> {
+  const changedFiles = new Set(session.paths);
+  const links = new Set<string>();
+  for (const event of events) {
+    for (const key of ["url", "link", "prUrl", "pullRequestUrl"]) {
+      const value = event.payload[key];
+      if (typeof value === "string" && value.length > 0) links.add(value);
+    }
+    const values = event.payload.links;
+    if (Array.isArray(values)) {
+      for (const value of values) if (typeof value === "string" && value.length > 0) links.add(value);
+    }
+  }
+  if (!session.cwd) return { changedFiles: [...changedFiles], branch: null, links: [...links] };
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", session.cwd, "status", "--short"], { maxBuffer: 64 * 1024 });
+    for (const line of stdout.split(/\r?\n/)) {
+      const match = line.match(/^..\s+(.+)$/);
+      if (match?.[1]) changedFiles.add(match[1]);
+    }
+  } catch {
+    // A removed or unavailable worktree still returns persisted metadata.
+  }
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", session.cwd, "branch", "--show-current"], { maxBuffer: 4096 });
+    const branch = stdout.trim();
+    return { changedFiles: [...changedFiles], branch: branch || null, links: [...links] };
+  } catch {
+    return { changedFiles: [...changedFiles], branch: null, links: [...links] };
+  }
+}
 
 function ingressFingerprint(input: TriggerInput): string {
   // Defaulted fields have the same meaning on a provider's retry. Arrival
@@ -129,6 +170,8 @@ export class Engine {
   private launchInflight = 0;
   private spawnAdmission: Promise<void> = Promise.resolve();
   private readonly interrupting = new Set<string>();
+  /** Worker ids whose kill has won the race with any in-flight turn. */
+  private readonly killRequested = new Set<string>();
   private readonly ingests = new Map<string, { fingerprint: string; result: Promise<IngestResult> }>();
   private busy = false;
   private flushScheduled = false;
@@ -534,6 +577,7 @@ export class Engine {
       if (running.length >= this.config.maxConcurrency) throw new TigerError("max_concurrency", `max concurrency ${this.config.maxConcurrency} reached`);
       if (this.closed) throw new TigerError("engine_closed", "Cannot resume a Worker after Engine shutdown");
       const runtime = this.runtimeByName(session.runtime ?? this.config.defaultWorkerRuntime);
+      this.killRequested.delete(workerId);
       const reset: LiveWorker = { busy: false, pumping: false, pumpAgain: false, terminalEmitted: false, suppressExit: false, workspace: { cwd: session.cwd, baseCwd: session.baseCwd, worktree: session.worktree } };
       this.live.set(workerId, reset);
       await this.transition(workerId, "starting");
@@ -592,11 +636,15 @@ export class Engine {
         workerId: id,
         sinceSeq,
       });
+      const workspace = await workspaceDetails(session, events);
       return {
         kind: "summary",
         id,
         since: sinceSeq ?? null,
         files: session.paths,
+        changedFiles: workspace.changedFiles,
+        branch: workspace.branch,
+        links: workspace.links,
         state: session.state,
         events: events.map((event) => ({
           id: event.id,
@@ -615,6 +663,8 @@ export class Engine {
         related: {
           threadId: session.threadId,
           runtime: session.runtime,
+          worktree: session.cwd,
+          baseCwd: session.baseCwd,
         },
       };
     }
@@ -728,6 +778,7 @@ export class Engine {
   async kill(id: string): Promise<{ status: "killed"; idempotent?: boolean }> {
     const session = await this.requireWorker(id);
     if (session.state === "killed") return { status: "killed", idempotent: true };
+    this.killRequested.add(id);
     const live = this.live.get(id);
     if (live) {
       // Mark the session terminal before awaiting process shutdown. A prompt
@@ -1278,6 +1329,7 @@ export class Engine {
   }
 
   private async transition(id: string, to: SessionState): Promise<void> {
+    if (to !== "killed" && this.killRequested.has(id)) return;
     const session = await this.store.getSession(id);
     if (!session) throw new TigerError("unknown_id", `unknown id ${id}`);
     assertTransition(session.state, to);

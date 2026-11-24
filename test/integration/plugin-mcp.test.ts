@@ -221,6 +221,7 @@ describe("host-driven Codex plugin", () => {
     await client.callTool({ name: "wait", arguments: { ids: [id], mode: "all", timeout: 5_000 } });
     const first = payload(await client.callTool({ name: "read", arguments: { id } }));
     expect(first.state).toBe("idle");
+    expect(first).toMatchObject({ changedFiles: [], branch: null, links: [], related: { worktree: expect.any(String) } });
     const firstEnd = (first.events as Array<{ id: string; type: string }>).find((event) => event.type === "worker.turn_end")!;
     expect(firstEnd).toBeDefined();
     const complete = payload(await client.callTool({ name: "read", arguments: { id: firstEnd.id } }));
