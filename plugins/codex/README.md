@@ -2,6 +2,8 @@
 
 The current Codex conversation coordinates TigerCat workers through a bundled local MCP server. The plugin starts no separate Router model and needs no Feishu account.
 
+Codex controls the native shell, editing, and file-writing tools in the host conversation. TigerCat's MCP server registers its own tools and cannot inspect or remove Codex's native tools. The plugin Skill asks the main conversation to delegate implementation to Workers, while Codex host settings govern any direct tool use. Worker permission policies apply to Workers launched by TigerCat.
+
 Build from the TigerCat repository with Node.js 22.13 or later:
 
 ```sh
