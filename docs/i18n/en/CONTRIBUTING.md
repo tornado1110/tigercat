@@ -1,4 +1,4 @@
-<!-- i18n-source: CONTRIBUTING.md @ d8a7e4947594cb1533818c5d1b67bcbba8b116da -->
+<!-- i18n-source: CONTRIBUTING.md @ ea10d77c5aa02683c50f6f599b25c729839abc7c -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Contributing to TigerCat
@@ -127,10 +127,7 @@ gives for the file after newlines are LF:
 Do not record a commit SHA. This repository rebase-merges, so commit SHAs
 change on merge, and the length of a short `%h` varies.
 
-The command compares the recorded blob with the blob of that Chinese file in
-the working tree, after converting CRLF to LF. It prints translations whose
-blob does not match. It only reports, and it always exits 0. A rebase that
-does not change file contents does not mark translations stale.
+The command converts CRLF to LF and reports translations whose source blob is stale. It also checks updates against HEAD. If the source blob changes and the translation body stays the same, or if the translation body matches the original, the command exits with a nonzero status. Add `-- --base <revision>` to compare committed changes with an earlier revision. PR CI compares against the target branch.
 
 Native-speaker review pull requests are welcome. Japanese, Korean, and Spanish
 are machine-assisted and have not been reviewed by native speakers.

@@ -5,13 +5,14 @@
  * Each translation records the git blob hash of its Chinese source
  * (`git rev-parse HEAD:<path>`). This compares that value with the blob
  * hash of the same file in the working tree, after CRLF is turned into LF.
- * Commit SHAs are not used: a rebase merge rewrites them. This only
- * reports. The process always exits 0.
+ * Use --base <revision> to audit committed updates against a PR base.
+ * Ordinary stale translations are advisory. Invalid updates fail the check.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HEADER = /^<!--\s*i18n-source:\s*(\S+)\s+@\s*([0-9a-f]{40})\s*-->$/;
@@ -50,63 +51,95 @@ function translations() {
 }
 
 function sourcePathOk(source) {
-  return source.length > 0 && !source.startsWith("/") && !source.split("/").includes("..");
+  return source.length > 0 && !source.startsWith("/") && !/[:\\]/.test(source) && !source.split("/").includes("..");
 }
 
-function blobHash(source) {
-  const raw = readFileSync(join(root, source));
-  const normalized = Buffer.from(String(raw).replace(/\r\n/g, "\n"), "utf8");
+function blobHash(sourceText) {
   return execFileSync("git", ["hash-object", "--stdin"], {
     cwd: root,
-    input: normalized,
+    input: sourceText.replace(/\r\n/g, "\n"),
     encoding: "utf8",
   }).trim();
 }
 
-function report() {
-  const lines = [];
+function translationBody(text) {
+  const lines = text.split(/\r?\n/);
+  if (HEADER.test(lines[0])) {
+    lines.shift();
+    if (lines[0]?.startsWith("> ")) lines.shift();
+  }
+  return lines.join("\n").replace(/\s+/g, " ").trim();
+}
+
+function previousTranslations(base) {
+  const paths = execFileSync("git", ["ls-tree", "-r", "-z", "--name-only", base], { cwd: root, encoding: "utf8" });
+  return new Set(paths.split("\0"));
+}
+
+function report(base) {
+  const previousPaths = previousTranslations(base);
+  let invalid = false;
   for (const file of translations()) {
     const rel = relative(root, file).split("\\").join("/");
+    function fail(reason) {
+      console.log(`invalid ${rel}: ${reason}`);
+      invalid = true;
+    }
     let text;
     try {
       text = readFileSync(file, "utf8");
     } catch {
-      lines.push(`stale ${rel}: file is missing`);
+      console.log(`stale ${rel}: file is missing`);
       continue;
     }
     const first = text.split(/\r?\n/, 1)[0];
     const match = HEADER.exec(first);
     if (!match) {
-      lines.push(`stale ${rel}: missing i18n-source blob header`);
+      console.log(`stale ${rel}: missing i18n-source blob header`);
       continue;
     }
     const source = match[1];
     const recorded = match[2];
     if (!sourcePathOk(source)) {
-      lines.push(`stale ${rel}: source path ${source} is outside the repo`);
+      console.log(`stale ${rel}: source path ${source} is outside the repo`);
       continue;
     }
-    let actual = "";
+    let sourceText;
     try {
-      actual = blobHash(source);
+      sourceText = readFileSync(join(root, source), "utf8");
     } catch {
-      actual = "";
-    }
-    if (!actual) {
-      lines.push(`stale ${rel}: cannot hash ${source} (records ${recorded})`);
+      console.log(`stale ${rel}: cannot read ${source} (records ${recorded})`);
       continue;
     }
+    const actual = blobHash(sourceText);
     if (actual !== recorded) {
-      lines.push(`stale ${rel}: records ${source} @ ${recorded}, working tree is ${actual}`);
+      console.log(`stale ${rel}: records ${source} @ ${recorded}, working tree is ${actual}`);
+    }
+    const body = translationBody(text);
+    if (body === translationBody(sourceText)) {
+      fail("body still matches the Chinese source");
+      continue;
+    }
+    if (previousPaths.has(rel)) {
+      const previous = execFileSync("git", ["show", `${base}:${rel}`], { cwd: root, encoding: "utf8" });
+      const previousHeader = HEADER.exec(previous.split(/\r?\n/, 1)[0]);
+      if (previousHeader && previousHeader[2] !== recorded && translationBody(previous) === body) {
+        fail("source blob changed without a translation body update");
+      }
     }
   }
-  return lines;
+  return invalid ? 1 : 0;
 }
 
 try {
-  for (const line of report()) console.log(line);
+  const { values } = parseArgs({ options: { base: { type: "string", default: "HEAD" } } });
+  const base = execFileSync("git", ["rev-parse", "--verify", "--end-of-options", `${values.base}^{commit}`], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  process.exitCode = report(base);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.log(`stale check failed: ${message}`);
+  process.exitCode = 1;
 }
-process.exit(0);

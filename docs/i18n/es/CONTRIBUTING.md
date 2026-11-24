@@ -1,4 +1,4 @@
-<!-- i18n-source: CONTRIBUTING.md @ d8a7e4947594cb1533818c5d1b67bcbba8b116da -->
+<!-- i18n-source: CONTRIBUTING.md @ ea10d77c5aa02683c50f6f599b25c729839abc7c -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # Contribuir a TigerCat
@@ -105,6 +105,6 @@ La primera línea de cada traducción es una marca de origen. Anota la ruta en e
 
 No anotes un SHA de commit. Este repositorio solo se fusiona con rebase, así que los SHA de commit cambian al fusionar, y la longitud de un `%h` corto varía.
 
-El comando compara el blob anotado con el blob de ese archivo chino en el árbol de trabajo, después de convertir CRLF a LF. Imprime las traducciones cuyo blob no coincide. Solo informa, y el código de salida es siempre 0. Un rebase que no cambia el contenido de los archivos no marca las traducciones como atrasadas.
+El comando convierte CRLF a LF e indica qué traducciones tienen un blob de origen desactualizado. También comprueba los cambios con respecto a HEAD. Si cambia el blob de origen pero el cuerpo de la traducción sigue igual, o si el cuerpo coincide con el original, el comando devuelve un código distinto de cero. Añade `-- --base <revision>` para comparar cambios ya confirmados con una revisión anterior. En los PR, CI compara con la rama de destino.
 
 Se agradecen los pull request de revisión de hablantes nativos. El japonés, el coreano y el español se elaboraron con ayuda automática y todavía no los ha revisado una persona nativa.
