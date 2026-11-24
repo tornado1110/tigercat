@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
+<!-- i18n-source: README.md @ a23dec63f7e2b04bed4b5ec7ba4fada9120199ee -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat
@@ -10,6 +10,8 @@
 TigerCat は [Agent Client Protocol](https://agentclientprotocol.com) の上に載っています。上流から見ると、これ**そのもの**が ACP agent です（`tigercat acp`）。そのため cc-connect や Zed のようなホストがこれを駆動できます。下流では ACP クライアントであり、登録済みのどの ACP runtime 上でも Worker を起動します。Feishu と DingTalk はそれらのホスト側に残り、TigerCat は IM チャンネルを実装しません。
 
 これは subagent ツールではありません。常駐する Router はルーティングと、人との対話だけを行います。Worker はタスクを一つずつ受け持ち、Thread を購読し、Router に結果を返します。
+
+プラグインモードでは、現在の Codex セッションのネイティブなシェル、編集、およびファイル書き込みのツールは Codex が制御します。TigerCat の MCP サーバーは自分のツールを登録し、Codex のネイティブツールを検査することも取り除くこともできません。TigerCat の Skill は、メインセッションに実装を Worker へ委ねるよう案内します。Worker の権限ポリシーは TigerCat が起動した Worker を制約し、メインセッションがツールを直接使うときは Codex ホストの設定に従います。
 
 このリポジトリは第 1 週の実現可能性スケルトンです。完成した M0 ではありません。実際の Claude Code / Codex セッション、Feishu の往復、実モデルを Router にすること、そしてベンダーの harness にネイティブの shell や編集ツールが無いという証明は、いずれも未検証です。CI は stdio stub を通して `claude-code` と `codex` のプロファイルを駆動します。実バイナリ向けの手動コマンドは下にあります。TigerCat 自身の MCP カタログがそれらのツールを載せないことは、下流の agent が自分で持っているツールについては何も言いません。クロスチャンネルの入口と共有 PR の入口は M1 であり、このスケルトンの範囲ではありません。
 

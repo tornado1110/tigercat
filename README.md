@@ -10,7 +10,7 @@ TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。独�
 
 调度者负责路由和对话，每个 Worker 负责一个任务，订阅 Thread，再回报执行结果。独立模式由 TigerCat Router 调度，插件模式由当前 Codex 会话调度。
 
-插件模式下，当前 Codex 会话的原生 Shell、编辑和写文件工具由 Codex 控制。TigerCat 的 Skill 引导主会话把实现交给 Worker。Worker 权限策略约束 TigerCat 启动的 Worker，主会话直接调用工具时遵循 Codex 宿主设置。
+插件模式下，当前 Codex 会话的原生 Shell、编辑和写文件工具由 Codex 控制。TigerCat 的 MCP 服务注册自己的工具，不能检查或移除 Codex 的原生工具。TigerCat 的 Skill 引导主会话把实现交给 Worker。Worker 权限策略约束 TigerCat 启动的 Worker，主会话直接调用工具时遵循 Codex 宿主设置。
 
 本仓库是第 1 周的可行性骨架，还不是完成的 M0。真实的 Claude Code / Codex 会话、一次飞书往返、用真实模型担任 Router，以及「某个厂商的 harness 没有原生 shell 或编辑工具」这一证明，都尚未验证。CI 通过 stdio stub 驱动 `claude-code` 和 `codex` 这两个 profile。真实二进制的手动命令见下文。TigerCat 自己的 MCP 目录不收录那些工具，这并不能说明下游 agent 自己带了哪些工具。跨频道进入和共享 PR 进入属于 M1，不是这个骨架的范围。
 
