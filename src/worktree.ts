@@ -15,7 +15,7 @@ export async function prepareWorkspace(baseCwd: string, workerId: string): Promi
   if (await isGitRepo(baseCwd)) {
     const cwd = path.join(baseCwd, ".tigercat", "worktrees", workerId);
     await mkdir(path.dirname(cwd), { recursive: true });
-    await execFileAsync("git", ["worktree", "add", "--detach", cwd], { cwd: baseCwd });
+    await execFileAsync("git", ["worktree", "add", "-b", `tigercat/${workerId}`, cwd], { cwd: baseCwd });
     return { cwd, worktree: true, baseCwd };
   }
   const cwd = path.join(baseCwd, ".tigercat", "workers", workerId);
