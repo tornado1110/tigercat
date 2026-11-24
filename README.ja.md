@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ a23dec63f7e2b04bed4b5ec7ba4fada9120199ee -->
+<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat
