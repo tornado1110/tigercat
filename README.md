@@ -147,11 +147,11 @@ Trigger 先经有序规则引擎准入，再按下面的方式路由：
 - 其余内容并入 Router 的下一回合。`candidate` 只在那里判定；没有订阅者的 `respond` 会被 spawn。
 - `spawn` 立即返回 `{ "status": "started" }`。Router 空闲时推送结果，忙碌时排进同一批。`wait` 是可选的。
 - 规则中的停止短语会取消当前回合（`session/cancel`），并**保留**订阅。因此「停，改为做 X」仍然能到达那个 Worker。
-- `interrupt` 取消当前回合，并保留订阅。它不把 Worker 标成 `lost`。`interrupted` 留给这种显式 interrupt，不用于重启。`kill` 或崩溃会丢掉全部订阅，并保留 worktree。重启时，内置的 `claude-code` 和 `codex` 不声明 `loadSession`，Worker 标成 `lost`，发出 `worker.lost`，订阅回到 Router，worktree 保留。只有 runtime 自己声明了 `loadSession` 且 `session/load` 成功，才会留下原来的 ACP session id 和订阅。这只用 stdio stub 验证过，没有在真实的 Claude Code 或 Codex 上验证。`lost` 之后，该 Thread 重新走 Router。
+- `interrupt` 取消当前回合，并保留订阅。它不把 Worker 标成 `lost`。`interrupted` 留给这种显式 interrupt，不用于重启。`kill` 或崩溃会丢掉全部订阅，并保留 worktree。重启时，内置的 `claude-code` 和 `codex` 不声明 `loadSession`，Worker 标成 `lost`，发出 `worker.lost`，订阅回到 Router，worktree 保留。只有回合已经结束，并且 runtime 自己声明了 `loadSession` 且 `session/load` 成功，才会留下原来的 ACP session id 和订阅。`running` 或 `starting` 即使能加载，也标成 `lost`（`worker.lost`，`reason` 是 `in_flight_turn`），订阅回到 Router。这只用 stdio stub 验证过，没有在真实的 Claude Code 或 Codex 上验证。`lost` 之后，该 Thread 重新走 Router。
 
 `worker.turn_end.awaitingInput` 是 TigerCat 加上的注解，不是 ACP 字段。agent 的 `stopReason` 按 ACP 送来的原样保存（通常是 `end_turn`）。只有当这个原因是 `end_turn`，并且 Worker 的文本看起来像提问或请求澄清时，TigerCat 才设置 `awaitingInput`。
 
-状态放在 `Store` 接口背后的 `node:sqlite` 里。进程只保留 socket 和 timer。重启会重新加载 Thread，以及尚未送达的 Router 队列。内置的 `claude-code` 和 `codex` 不声明 `loadSession`，重启把 Worker 标成 `lost`，发出 `worker.lost`，订阅释放，Thread 回到 Router。声明了 `loadSession` 且 `session/load` 成功时，原来的 ACP session id 和订阅会留下；这只用 stdio stub 验证过，不是真实 Claude Code 或 Codex 上的结果。
+状态放在 `Store` 接口背后的 `node:sqlite` 里。进程只保留 socket 和 timer。重启会重新加载 Thread，以及尚未送达的 Router 队列。内置的 `claude-code` 和 `codex` 不声明 `loadSession`，重启把 Worker 标成 `lost`，发出 `worker.lost`，订阅释放，Thread 回到 Router。回合已经结束，并且声明了 `loadSession` 且 `session/load` 成功时，原来的 ACP session id 和订阅会留下。回合还在进行时标成 `lost`，不改成 `idle`。这只用 stdio stub 验证过，不是真实 Claude Code 或 Codex 上的结果。
 
 ## 测试
 

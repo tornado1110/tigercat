@@ -294,8 +294,8 @@ describe("restart drops unrestorable Worker subscriptions", () => {
     const lost = (await second.engine.events()).find((event) => event.type === "worker.lost" && event.workerId === workerId);
     expect(lost?.payload).toMatchObject({
       code: "lost",
-      reason: "no_session",
-      message: "worker session could not be restored after restart",
+      reason: "in_flight_turn",
+      message: "in-flight turn was lost on restart",
     });
     const follow = await second.engine.ingest({
       source: "feishu",

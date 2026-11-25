@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 43016f20a1a6551c9cc56c01a932d9b34db92d14 -->
+<!-- i18n-source: docs/operations.md @ 516d8b788e91768da9cb776ed995b8b93dcf06d5 -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # Operar TigerCat
@@ -20,7 +20,7 @@ Nada de lo que hay aquí se ha ejecutado contra una cuenta real de DeepSeek, Cla
 | Router con script cuando `coordinator_runtime` no está definido | probado con el brain con script dentro del proceso |
 | Proceso de Router ACP nombrado por `coordinator_runtime` | implementado (`launchCoordinator`); no se ejecutó contra un modelo real |
 | Los Thread de sqlite, el registro de eventos y la cola del Router pendiente sobreviven a un proceso nuevo | implementado en `Engine.start` |
-| Las sesiones ACP del Worker sobreviven a un reinicio | los perfiles integrados `claude-code` y `codex` no anuncian `loadSession`. Un reinicio sobre ellos marca el Worker como `lost`, registra un `worker.lost` y devuelve la suscripción al Router. El id de sesión ACP original y la suscripción se quedan solo cuando ese runtime anuncia `loadSession` y `session/load` tiene éxito. Esa ruta de éxito se probó solo con el stub stdio, no contra Claude Code o Codex reales |
+| Las sesiones ACP del Worker sobreviven a un reinicio | los perfiles integrados `claude-code` y `codex` no anuncian `loadSession`. Un reinicio sobre ellos marca el Worker como `lost`, registra un `worker.lost` y devuelve la suscripción al Router. El id de sesión ACP original y la suscripción se quedan solo cuando el turno ya había terminado (`idle` o `awaiting_input`) y ese runtime anuncia `loadSession` y `session/load` tiene éxito. Un turno en `running` o `starting` no tiene resultado, así que queda `lost` con razón `in_flight_turn` aunque `session/load` pudiera tener éxito. Esa ruta de éxito se probó solo con el stub stdio, no contra Claude Code o Codex reales |
 | Los procesos worker huérfanos se recogen en el siguiente arranque | implementado. Un pid registrado cuya línea de comando todavía coincide con ese runtime se mata antes de la recuperación. Probado con el stub stdio. En Windows solo se mata cuando se puede leer la línea de comando y coincide |
 | Feishu o DingTalk dentro de TigerCat | no implementado; esos canales se quedan en el host |
 | Router de DeepSeek Chat Completions (`router.provider = "deepseek"`) | implementado; lee `DEEPSEEK_API_KEY`; no probado en vivo |
@@ -159,11 +159,11 @@ Entonces `Engine.start`:
 
 - deja en su sitio una fila de sesión del Router que ya exista, o inserta una
 - devuelve a pending las filas de la cola del Router que estaban en curso y pone `router_busy` en `0`
-- para cada Worker que no es terminal, trata primero el pid registrado. Un proceso vivo cuya línea de comando todavía coincide con el runtime se mata. Después, si ese runtime anuncia `loadSession` y `session/load` tiene éxito, se carga el id de sesión ACP original en un proceso nuevo, el Worker vuelve a `idle`, la suscripción del Thread se queda y el siguiente evento va directo a ese Worker. Si no hay id de sesión, el runtime no anuncia `loadSession`, o `session/load` falla, el Worker se marca `lost`, se sueltan las suscripciones y se registra un `worker.lost`. `code` es `lost`, `message` es `worker session could not be restored after restart`, y `reason` es `no_session`, `load_unsupported`, `load_failed` o `session_mismatch`
+- para cada Worker que no es terminal, trata primero el pid registrado. Un proceso vivo cuya línea de comando todavía coincide con el runtime se mata. Si el estado es `running` o `starting`, ese turno no tiene resultado: el Worker se marca `lost`, se registra un `worker.lost` con `reason` `in_flight_turn` y `message` `in-flight turn was lost on restart`, se suelta la suscripción y el siguiente evento va al Router. Un `session/load` con éxito no pasa ese Worker a `idle`. Solo cuando el turno ya había terminado (`idle` o `awaiting_input`) y el runtime anuncia `loadSession` y `session/load` tiene éxito, se carga el id de sesión ACP original en un proceso nuevo, el estado se queda igual, la suscripción del Thread se queda y el siguiente evento va directo a ese Worker. Sin id de sesión, sin anuncio de `loadSession`, o con un `session/load` que falla, también se marca `lost` y se suelta la suscripción. `code` es `lost`. Los otros `reason` son `no_session`, `load_unsupported`, `load_failed` o `session_mismatch`, y ese `message` es `worker session could not be restored after restart`
 
 Los Thread y el registro de eventos permanecen. El directorio del worktree se queda en disco. `removeWorkspace` existe y no se llama en esta ruta.
 
-Los perfiles integrados `claude-code` y `codex` no anuncian `loadSession`. Sobre ellos, el reinicio toma el camino `lost` y la suscripción vuelve al Router. Conservar la suscripción, como se dijo arriba, ocurre solo cuando el propio runtime anuncia `loadSession` y `session/load` tiene éxito. Esa ruta solo se ha comprobado con el stub stdio.
+Los perfiles integrados `claude-code` y `codex` no anuncian `loadSession`. Sobre ellos, el reinicio toma el camino `lost` y la suscripción vuelve al Router. Conservar la suscripción, como se dijo arriba, ocurre solo cuando el turno ya había terminado y el propio runtime anuncia `loadSession` y `session/load` tiene éxito. Esa ruta solo se ha comprobado con el stub stdio.
 
 `interrupted` queda reservado para un interrupt explícito. El reinicio no escribe ese estado. `interrupt` cancela el turno actual y conserva las suscripciones; no marca el Worker como `lost`. `resume` acepta un Worker que ya está en `lost` o `interrupted`: abre una sesión ACP nueva en el worktree existente con la entrada nueva de quien llama. Eso no es `session/load`.
 
@@ -200,7 +200,7 @@ Un JSON de `runtime test` con `ok: false` y `mode: "dry-run"` significa que fall
 
 `max concurrency <n> reached` es `max_concurrency` en la configuración (el valor predeterminado es 4). Cuenta Workers en `starting` o `running`.
 
-Después de una caída, `tigercat list --json` ejecuta él mismo la recuperación. Un Worker que se puede cargar vuelve a `idle`; uno que no se puede cargar aparece como `lost`. Arranca `tigercat acp` solo después de eso, o arranca `acp` directamente y deja que haga la misma recuperación. Cuando `session/load` tiene éxito, el id de sesión ACP original sigue ahí. Cuando falla, no esperes que el id antiguo funcione.
+Después de una caída, `tigercat list --json` ejecuta él mismo la recuperación. Un Worker cuyo turno ya había terminado y cuyo `session/load` tiene éxito se queda en `idle` o `awaiting_input`. Un Worker que seguía en un turno aparece como `lost`. Arranca `tigercat acp` solo después de eso, o arranca `acp` directamente y deja que haga la misma recuperación. El id de sesión ACP original sigue ahí solo cuando el turno había terminado y `session/load` tiene éxito. Si la carga falla, o el turno estaba en curso, no esperes que el id antiguo funcione.
 
 Si dos procesos `tigercat acp` apuntaban a un mismo archivo sqlite, para los dos. El código no repara una base de datos que usaron dos escritores.
 

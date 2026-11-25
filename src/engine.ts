@@ -206,10 +206,15 @@ interface LiveWorker {
  * This object only holds live process handles and timers.
  */
 function lostReason(error: unknown): string {
-  if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "session_mismatch")) {
+  if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "session_mismatch" || error.code === "in_flight_turn")) {
     return error.code;
   }
   return "load_failed";
+}
+
+function lostMessage(reason: string): string {
+  if (reason === "in_flight_turn") return "in-flight turn was lost on restart";
+  return "worker session could not be restored after restart";
 }
 
 export class Engine {
@@ -346,6 +351,13 @@ export class Engine {
     if (this.closed) return;
     this.reapOrphan(session);
     if (this.closed) return;
+    // A prompt that had not finished has no result to restore. session/load
+    // reloads the session id only, so leaving the Worker idle would drop the
+    // turn with no end or error event.
+    if (session.state === "running" || session.state === "starting") {
+      await this.markLost(session, "in_flight_turn");
+      return;
+    }
     if (!session.acpSessionId) {
       await this.markLost(session, "no_session");
       return;
@@ -407,35 +419,28 @@ export class Engine {
       await handle.kill();
       return true;
     }
+    if (current.state === "running" || current.state === "starting") {
+      live.suppressExit = true;
+      await handle.kill();
+      throw new TigerError("in_flight_turn", "in-flight turn was lost on restart");
+    }
     live.handle = handle;
     await this.store.updateSession(session.id, {
       pid: handle.pid ?? null,
       acpSessionId: session.acpSessionId,
       updatedAt: this.clock.now(),
     });
-    await this.settleRestored(session.id);
     if (this.closed || live.suppressExit) {
       await handle.kill();
       return true;
     }
     await this.emit("worker.update", session.id, {
-      state: "idle",
+      state: current.state,
       recovered: true,
       nativeSession: "loaded",
       acpSessionId: session.acpSessionId,
     });
     return true;
-  }
-
-  private async settleRestored(id: string): Promise<void> {
-    const session = await this.store.getSession(id);
-    if (!session || isTerminal(session.state)) return;
-    if (session.state === "starting") await this.transition(id, "running");
-    const current = await this.store.getSession(id);
-    if (!current || isTerminal(current.state)) return;
-    if (current.state === "running" || current.state === "awaiting_input") {
-      await this.transition(id, "idle");
-    }
   }
 
   private async markLost(session: SessionRecord, reason: string): Promise<void> {
@@ -446,7 +451,7 @@ export class Engine {
     await this.store.updateSession(session.id, { pid: null, updatedAt: this.clock.now() });
     await this.releaseSubscriptions(session.id);
     await this.emit("worker.lost", session.id, {
-      message: "worker session could not be restored after restart",
+      message: lostMessage(reason),
       code: "lost",
       reason,
     });

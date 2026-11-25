@@ -88,6 +88,7 @@ action lists; the `selected` default in these files is `allow-once`.
 | `ignore-cancel.json` | Receives `session/cancel` but finishes with `end_turn` instead of `cancelled`. |
 | `no-session-load.json` | `agentCapabilities.loadSession` is false; `session/load` returns JSON-RPC `-32601`. |
 | `session-load.json` | `loadSession` is true. `session/new` mints a new id. `session/load` accepts only that id. |
+| `session-load-hang` | Same load support as `session-load`, but `session/prompt` does not finish. A restart while that turn is open is `lost`, not `idle`. |
 | `bad-handshake.json` | `initialize` returns `protocolVersion: 999` (version mismatch). |
 | `leak-child-process.json` | On `session/new`, spawns a detached `sleep 3600` and does not reap it. |
 

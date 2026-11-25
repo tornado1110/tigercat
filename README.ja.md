@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 324a024452bf15e3c15d4d2c64564c8f9399c138 -->
+<!-- i18n-source: README.md @ 95cc3403c6edeeab67a919b3261780094399072a -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat
@@ -126,11 +126,11 @@ Trigger は順序付きのルールエンジンで入場したあと、次のよ
 - それ以外は Router の次のターンにまとめられます。`candidate` の判定はそこでだけ行います。購読者のいない `respond` は spawn されます。
 - `spawn` は直ちに `{ "status": "started" }` を返します。結果は Router が空いているときに押し出され、忙しいときは一つのバッチに並びます。`wait` は任意です。
 - ルールにある停止の句は、現在のターンを取り消し（`session/cancel`）、購読は**残します**。そのため「止めて、代わりに X をする」は、その Worker に届いたままです。
-- `interrupt` は現在のターンを取り消し、購読は残します。Worker を `lost` にはしません。`interrupted` はこの明示的な interrupt のためのもので、再起動には使いません。`kill` またはクラッシュは購読をすべて外し、worktree は残します。再起動時、組み込みの `claude-code` と `codex` は `loadSession` を宣言しないので、Worker は `lost` になり、`worker.lost` が記録され、購読は Router に戻り、worktree は残ります。runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけ、元の ACP session id と購読が残ります。これは stdio stub だけで確認し、本物の Claude Code や Codex では確認していません。`lost` のあと、その Thread は再び Router を通ります。
+- `interrupt` は現在のターンを取り消し、購読は残します。Worker を `lost` にはしません。`interrupted` はこの明示的な interrupt のためのもので、再起動には使いません。`kill` またはクラッシュは購読をすべて外し、worktree は残します。再起動時、組み込みの `claude-code` と `codex` は `loadSession` を宣言しないので、Worker は `lost` になり、`worker.lost` が記録され、購読は Router に戻り、worktree は残ります。ターンがすでに終わっていて、runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけ、元の ACP session id と購読が残ります。`running` または `starting` は読み込めても `lost` になり（`worker.lost`、`reason` は `in_flight_turn`）、購読は Router に戻ります。これは stdio stub だけで確認し、本物の Claude Code や Codex では確認していません。`lost` のあと、その Thread は再び Router を通ります。
 
 `worker.turn_end.awaitingInput` は TigerCat が付ける注釈であり、ACP のフィールドではありません。agent の `stopReason` は ACP が送ったまま保存します（通常は `end_turn`）。この理由が `end_turn` であり、かつ Worker のテキストが質問か、確認を求めているように見えるときだけ、TigerCat は `awaitingInput` を立てます。
 
-状態は `Store` インターフェースの背後にある `node:sqlite` に置きます。プロセスが保持するのは socket と timer だけです。再起動すると Thread と、まだ届いていない Router のキューを読み直します。組み込みの `claude-code` と `codex` は `loadSession` を宣言しないので、再起動は Worker を `lost` にし、`worker.lost` を記録し、購読を外し、Thread は Router に戻ります。`loadSession` を宣言し `session/load` が成功したときは、元の ACP session id と購読が残ります。これは stdio stub だけで確認したもので、本物の Claude Code や Codex 上の結果ではありません。
+状態は `Store` インターフェースの背後にある `node:sqlite` に置きます。プロセスが保持するのは socket と timer だけです。再起動すると Thread と、まだ届いていない Router のキューを読み直します。組み込みの `claude-code` と `codex` は `loadSession` を宣言しないので、再起動は Worker を `lost` にし、`worker.lost` を記録し、購読を外し、Thread は Router に戻ります。ターンがすでに終わっていて `loadSession` を宣言し `session/load` が成功したときは、元の ACP session id と購読が残ります。まだ進行中のターンは `lost` になり、`idle` にはしません。これは stdio stub だけで確認したもので、本物の Claude Code や Codex 上の結果ではありません。
 
 ## テスト
 
