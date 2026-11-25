@@ -41,7 +41,7 @@ tigercat runtime test codex
 
 Worker 的 `permission = "ask"` 会通过 MCP elicitation 交给当前 Codex 宿主审批；宿主不支持审批 UI 或用户拒绝时，Worker 只会取消，TigerCat 不会自动放行。插件还提供可选的本地 `lark-cli` capability（需宿主显式配置绑定），用于按 profile 读取授权状态、按需发现能力和执行用户明确授权的业务命令；未知写入结果不会盲重试。
 
-MCP 连接关闭时会清理 Worker。默认每个插件进程有隔离的临时状态；设置 `TIGERCAT_PLUGIN_DB` 可保留历史，同一个数据库只允许一个插件进程占用。内置 runtime `claude-code` 和 `codex` 暂不恢复会话。锁定的 adapter `@agentclientprotocol/claude-agent-acp@0.108.0` 和 `@agentclientprotocol/codex-acp@2.7.0` 会声明 `loadSession: true`，但重启不会为这两个名字调用 `session/load`。非终态内置 Worker 标为 `lost`（`worker.lost`，`reason` 是 `builtin_no_restore`），订阅回到 Router，不自动重放任务。`interrupted` 留给显式 interrupt，不用于这次重启。异常退出遗留的 `.plugin-lock` 需要确认旧进程退出后再移除。当前版本没有自动唤醒 Codex 会话、断线继续执行或持久结果投递的承诺。
+MCP 连接关闭时会清理 Worker。默认每个插件进程有隔离的临时状态；设置 `TIGERCAT_PLUGIN_DB` 可保留历史，同一个数据库只允许一个插件进程占用。内置 runtime `claude-code` 和 `codex` 暂不恢复会话。锁定的 adapter `@agentclientprotocol/claude-agent-acp@0.108.0` 和 `@agentclientprotocol/codex-acp@2.7.0` 会声明 `loadSession: true`，但重启不会为这两个名字调用 `session/load`。非终态内置 Worker 标为 `lost`（`worker.lost`，`reason` 是 `builtin_no_restore`），订阅回到 Router，不自动重放任务。判定按 runtime 名字，所以配置里同名覆盖内置的 `claude-code` 或 `codex` 也不恢复，同样标成 `lost`（`reason` 是 `builtin_no_restore`）；按名字还是按 adapter 判定，留到以后真实 adapter 的 `session/load`。`interrupted` 留给显式 interrupt，不用于这次重启。异常退出遗留的 `.plugin-lock` 需要确认旧进程退出后再移除。当前版本没有自动唤醒 Codex 会话、断线继续执行或持久结果投递的承诺。
 
 `lark-cli` 用于插件中的可选飞书业务操作。原生飞书机器人有独立的进程入口和机器人身份。
 
@@ -147,11 +147,11 @@ Trigger 先经有序规则引擎准入，再按下面的方式路由：
 - 其余内容并入 Router 的下一回合。`candidate` 只在那里判定；没有订阅者的 `respond` 会被 spawn。
 - `spawn` 立即返回 `{ "status": "started" }`。Router 空闲时推送结果，忙碌时排进同一批。`wait` 是可选的。
 - 规则中的停止短语会取消当前回合（`session/cancel`），并**保留**订阅。因此「停，改为做 X」仍然能到达那个 Worker。
-- `interrupt` 取消当前回合，并保留订阅。它不把 Worker 标成 `lost`。`interrupted` 留给这种显式 interrupt，不用于重启。`kill` 或崩溃会丢掉全部订阅，并保留 worktree。内置 runtime `claude-code` 和 `codex` 暂不恢复会话：重启不调用 `session/load`，非终态 Worker 标成 `lost`（`reason` 是 `builtin_no_restore`），订阅回到 Router，worktree 保留。锁定的 adapter 会声明 `loadSession: true`，这里还没有用上。非内置 runtime 在回合已经结束且 `session/load` 成功时才留下原来的 ACP session id 和订阅。`running` 或 `starting` 标成 `lost`（`reason` 是 `in_flight_turn`）。这只用 stdio stub 验证过，没有在真实的 Claude Code 或 Codex 上验证。`lost` 之后，该 Thread 重新走 Router。
+- `interrupt` 取消当前回合，并保留订阅。它不把 Worker 标成 `lost`。`interrupted` 留给这种显式 interrupt，不用于重启。`kill` 或崩溃会丢掉全部订阅，并保留 worktree。内置 runtime `claude-code` 和 `codex` 暂不恢复会话：重启不调用 `session/load`，非终态 Worker 标成 `lost`（`reason` 是 `builtin_no_restore`），订阅回到 Router，worktree 保留。判定按 runtime 名字，所以配置里同名覆盖内置的 `claude-code` 或 `codex` 也不恢复，同样标成 `lost`（`reason` 是 `builtin_no_restore`）；按名字还是按 adapter 判定，留到以后真实 adapter 的 `session/load`。锁定的 adapter 会声明 `loadSession: true`，这里还没有用上。非内置 runtime 在回合已经结束且 `session/load` 成功时才留下原来的 ACP session id 和订阅。`running` 或 `starting` 标成 `lost`（`reason` 是 `in_flight_turn`）。这只用 stdio stub 验证过，没有在真实的 Claude Code 或 Codex 上验证。`lost` 之后，该 Thread 重新走 Router。
 
 `worker.turn_end.awaitingInput` 是 TigerCat 加上的注解，不是 ACP 字段。agent 的 `stopReason` 按 ACP 送来的原样保存（通常是 `end_turn`）。只有当这个原因是 `end_turn`，并且 Worker 的文本看起来像提问或请求澄清时，TigerCat 才设置 `awaitingInput`。
 
-状态放在 `Store` 接口背后的 `node:sqlite` 里。进程只保留 socket 和 timer。重启会重新加载 Thread，以及尚未送达的 Router 队列。内置 runtime `claude-code` 和 `codex` 暂不恢复会话，重启标成 `lost`（`reason` 是 `builtin_no_restore`），订阅释放，Thread 回到 Router。锁定的 adapter 会声明 `loadSession: true`，重启不为它们调用 `session/load`。非内置 runtime 在回合已经结束且 `session/load` 成功时留下原来的 ACP session id 和订阅。回合还在进行时标成 `lost`，不改成 `idle`。这只用 stdio stub 验证过，不是真实 Claude Code 或 Codex 上的结果。
+状态放在 `Store` 接口背后的 `node:sqlite` 里。进程只保留 socket 和 timer。重启会重新加载 Thread，以及尚未送达的 Router 队列。内置 runtime `claude-code` 和 `codex` 暂不恢复会话，重启标成 `lost`（`reason` 是 `builtin_no_restore`），订阅释放，Thread 回到 Router。判定按 runtime 名字，所以配置里同名覆盖内置的 `claude-code` 或 `codex` 也不恢复，同样标成 `lost`（`reason` 是 `builtin_no_restore`）；按名字还是按 adapter 判定，留到以后真实 adapter 的 `session/load`。锁定的 adapter 会声明 `loadSession: true`，重启不为它们调用 `session/load`。非内置 runtime 在回合已经结束且 `session/load` 成功时留下原来的 ACP session id 和订阅。回合还在进行时标成 `lost`，不改成 `idle`。这只用 stdio stub 验证过，不是真实 Claude Code 或 Codex 上的结果。
 
 ## 测试
 
