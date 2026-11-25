@@ -201,7 +201,7 @@ async function runTool(name: RouterToolName, args: Record<string, unknown>, tool
 function toolSchemas(): Array<{ type: "function"; function: { name: string; description: string; parameters: object } }> {
   const descriptions: Record<RouterToolName, string> = {
     spawn: "Start a Worker for an executable task.",
-    resume: "Resume an interrupted Worker.",
+    resume: "Resume a lost or interrupted Worker.",
     list: "List Workers and states.",
     send: "Send follow-up input to a Worker.",
     read: "Read Worker state or events.",

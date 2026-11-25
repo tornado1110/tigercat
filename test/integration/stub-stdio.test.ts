@@ -373,7 +373,13 @@ describe("real stdio stub-agent", () => {
     });
     await second.start();
     const recovered = await second.store.getSession(spawned.workerId);
-    expect(recovered?.state).toBe("interrupted");
+    expect(recovered?.state).toBe("lost");
+    const lost = (await second.events()).find((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
+    expect(lost?.payload).toMatchObject({
+      code: "lost",
+      reason: "load_unsupported",
+      message: "worker session could not be restored after restart",
+    });
     expect(await second.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(0);
     const follow = await second.ingest({
       source: "feishu",

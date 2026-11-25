@@ -82,7 +82,7 @@ function describe(name: string): string {
     case "spawn":
       return "Start a Worker. Returns immediately with its id.";
     case "resume":
-      return "Resume an interrupted Worker on its existing worktree.";
+      return "Resume a lost or interrupted Worker on its existing worktree.";
     case "list":
       return "List Workers and states.";
     case "send":

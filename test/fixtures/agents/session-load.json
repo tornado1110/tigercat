@@ -1,0 +1,29 @@
+{
+  "name": "session-load",
+  "description": "initialize advertises agentCapabilities.loadSession=true. session/new mints a fresh session id and remembers it. session/load accepts only that id and does not mint another. A later session/prompt on the loaded id completes like the ok scenario. Used to prove a restart resumed the original ACP session.",
+  "protocolVersion": 1,
+  "initialize": {
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true
+      },
+      "agentInfo": {
+        "name": "tigercat-stub",
+        "title": "TigerCat stub agent",
+        "version": "0.0.0-test"
+      }
+    }
+  },
+  "onSessionLoad": {
+    "result": {}
+  },
+  "onPrompt": [
+    {
+      "action": "complete",
+      "result": {
+        "stopReason": "end_turn"
+      }
+    }
+  ]
+}

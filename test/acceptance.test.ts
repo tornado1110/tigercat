@@ -264,7 +264,7 @@ describe("awaitingInput heuristic", () => {
   });
 });
 
-describe("restart drops dead Worker subscriptions", () => {
+describe("restart drops unrestorable Worker subscriptions", () => {
   it("sends the Thread back through the Router when the process is gone", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "tigercat-restart-"));
     roots.push(root);
@@ -290,7 +290,13 @@ describe("restart drops dead Worker subscriptions", () => {
     const subs = await second.engine.store.subscriptionsForThread(thread?.id ?? "");
     expect(subs.map((sub) => sub.workerId)).not.toContain(workerId);
     const dead = await second.engine.store.getSession(workerId);
-    expect(dead?.state).toBe("interrupted");
+    expect(dead?.state).toBe("lost");
+    const lost = (await second.engine.events()).find((event) => event.type === "worker.lost" && event.workerId === workerId);
+    expect(lost?.payload).toMatchObject({
+      code: "lost",
+      reason: "no_session",
+      message: "worker session could not be restored after restart",
+    });
     const follow = await second.engine.ingest({
       source: "feishu",
       thread: "feishu:eng:cli",

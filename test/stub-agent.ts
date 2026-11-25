@@ -4,8 +4,9 @@
  * milliseconds; this process never sleeps in real time. Hang waits on
  * an abort signal instead of a timer.
  */
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
@@ -48,13 +49,20 @@ const connection = acp
       const pidFile = process.env.TIGERCAT_LEAK_PIDFILE;
       if (pidFile && child.pid) writeFileSync(pidFile, String(child.pid));
     }
-    const sessionId = "stub-session";
+    const sessionId = scenario === "session-load" ? mintLoadableSession() : "stub-session";
     sessions.set(sessionId, { pending: null });
     void params;
     return { sessionId, configOptions: [{ id: "model", name: "Model", category: "model", type: "select" as const, currentValue: "test-model", options: [{ value: "test-model", name: "Test Model" }] }] };
   })
-  .onRequest(acp.methods.agent.session.load, () => {
-    throw acp.RequestError.methodNotFound("session/load");
+  .onRequest(acp.methods.agent.session.load, ({ params }) => {
+    if (scenario !== "session-load") throw acp.RequestError.methodNotFound("session/load");
+    const expected = persistedSessionId();
+    if (!expected || params.sessionId !== expected) {
+      throw acp.RequestError.invalidParams(undefined, "unknown session");
+    }
+    sessions.set(params.sessionId, { pending: null });
+    sessionNote(`load ${params.sessionId}`);
+    return {};
   })
   .onRequest("_session/steering", (raw) => raw as {
     sessionId: string; prompt: unknown; _meta?: { steering?: { idleBehavior?: string } };
@@ -138,6 +146,30 @@ const connection = acp
   .connect(stream);
 
 await connection.closed;
+
+function mintLoadableSession(): string {
+  const sessionId = `stub-load-${randomUUID()}`;
+  const file = process.env.TIGERCAT_STUB_SESSION_FILE;
+  if (file) writeFileSync(file, sessionId);
+  sessionNote(`new ${sessionId}`);
+  return sessionId;
+}
+
+function persistedSessionId(): string | undefined {
+  const file = process.env.TIGERCAT_STUB_SESSION_FILE;
+  if (!file) return undefined;
+  try {
+    const id = readFileSync(file, "utf8").trim();
+    return id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionNote(line: string): void {
+  const file = process.env.TIGERCAT_STUB_SESSION_LOG;
+  if (file) appendFileSync(file, `${line}\n`);
+}
 
 function okText(prompt: unknown): string {
   const text = promptText(prompt);

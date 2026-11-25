@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 3452da8c151a5f5df97290f28906e96d7143b976 -->
+<!-- i18n-source: docs/operations.md @ 96cd4319b7c7d2ddfbad8368770a3c95a94ce5cc -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat の操作
@@ -20,8 +20,8 @@
 | `coordinator_runtime` が未設定のときのスクリプト化された Router | プロセス内のスクリプト化された brain でテスト済み |
 | `coordinator_runtime` が名指しする ACP Router プロセス | 実装済み（`launchCoordinator`）。実モデルに対しては未実行 |
 | sqlite の Thread、イベントログ、未配送の Router キューが新しいプロセスを越えて残る | `Engine.start` に実装済み |
-| Worker の ACP セッションが再起動を越えて残る | 未実装。`loadSession` は false と宣言される |
-| 次の起動で孤児の worker プロセスを回収する | 未実装 |
+| Worker の ACP セッションが再起動を越えて残る | 下流の runtime が `initialize` で `loadSession` を宣言し、`session/load` が成功したとき、元の ACP session id を戻し、Thread の購読は残す。そうでなければ Worker は `lost` になり、`worker.lost` を記録する。stdio stub でテストした。Claude Code や Codex には当てていない |
+| 次の起動で孤児の worker プロセスを回収する | 実装済み。記録された pid のコマンド行がまだその runtime と一致するなら、回復の前に殺す。stdio stub でテストした。Windows ではコマンド行が読めて一致するときだけ殺す |
 | TigerCat の中の Feishu または DingTalk | 未実装。それらのチャンネルはホスト側に残る |
 | DeepSeek Chat Completions Router（`router.provider = "deepseek"`） | 実装済み。`DEEPSEEK_API_KEY` を読む。実機テストはしていない |
 
@@ -149,7 +149,7 @@ stop サブコマンドはありません。
 
 その経路は 500ms 後に `process.exit(0)` も予定し、上流の MCP クライアントが閉じたときにもう一度予定します。Worker の解体はその窓の中でのベストエフォートです。排出しきる保証ではありません。
 
-このコードに SIGINT と SIGTERM のハンドラはありません。POSIX では worker プロセスは detached で起動されるので、TigerCat のプロセスだけを殺すシグナルはそれらを残します。次の起動は保存された pid を見ず、殺しもしません。
+このコードに SIGINT と SIGTERM のハンドラはありません。POSIX では worker プロセスは detached で起動されるので、TigerCat のプロセスだけを殺すシグナルはそれらを残します。次の起動は保存された pid を見ます。コマンド行がその runtime とまだ一致する孤児プロセスは、回復の前に殺されます。
 
 ## 再起動と回復
 
@@ -159,17 +159,19 @@ stop サブコマンドはありません。
 
 - 既存の Router セッション行を残すか、一行挿入する
 - 処理中の Router キュー行を pending に戻し、`router_busy` を `0` にする
-- 終端でない Worker をすべて `interrupted` にし、購読を外し、`worker process was not alive after restart` という `worker.error` を記録する
+- 終端でない Worker ごとに、まず記録された pid を扱う。コマンド行が runtime とまだ一致する生きたプロセスは殺す。そのあと、その runtime が `loadSession` を宣言し `session/load` が成功すれば、新しいプロセスで元の ACP session id を読み込む。Worker は `idle` に戻り、Thread の購読は残り、次のイベントはその Worker に直接渡る。session id が無い、runtime が `loadSession` を宣言しない、または `session/load` が失敗したときは、Worker を `lost` にし、購読を外し、`worker.lost` を記録する。`code` は `lost`、`message` は `worker session could not be restored after restart`、`reason` は `no_session`、`load_unsupported`、`load_failed`、`session_mismatch` のいずれか
 
 Thread とイベントログは残ります。worktree ディレクトリはディスクに残ります。`removeWorkspace` は存在しますが、この経路では呼びません。
 
+`interrupted` は今も正当な状態です。自動回復はそれを書きません。`resume` は `lost` と `interrupted` を受けます。呼び出し側が渡した新しい入力で、元の worktree に新しい ACP session を開きます。これは `session/load` ではありません。
+
 起きないこと:
 
-- `session/load` は呼ばれません。上流の agent は `loadSession: false` と宣言します。`runtime test` は `degraded: ["loadSession"]` と報告します。Worker は前の ACP セッションを再開できません。
-- 保存された pid は回収されません。
-- ターンの途中だった Worker は再開されません。購読が外れたので、その Thread は再び Router を通ります。
+- 上流の TigerCat agent は今も `loadSession: false` と宣言します。`runtime test` は今も `degraded: ["loadSession"]` と報告します。その探査は `session/new` だけを行い、`session/load` は呼びません。
+- 死んだプロセスを `running` または `starting` のままにはしません。状態がこの二つなら、記録された pid は生きていなければなりません。
+- 読み込みに失敗したとき、黙って新しい ACP session は開きません。それは `resume` の仕事です。
 
-一回きりのコマンド `list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe`、`unsubscribe`、`spawn` は同じデータベースを開き、自分で `Engine.start` を呼びます。終端でない Worker が残るデータベースに対して `tigercat list` を実行すると、別の `tigercat acp` がまだそれらを持っていても、それらの Worker は interrupted になります。実行中プロセスのデータベースにこれらのコマンドを向けないでください。読み取り専用の状態コマンドはありません。
+一回きりのコマンド `list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe`、`unsubscribe`、`spawn` は同じデータベースを開き、自分で `Engine.start` を呼びます。終端でない Worker が残るデータベースに対して `tigercat list` を実行すると、`session/load` できる Worker は回復し、残りは `lost` になります。別の `tigercat acp` がまだそれらを持っていても同じです。実行中プロセスのデータベースにこれらのコマンドを向けないでください。読み取り専用の状態コマンドはありません。
 
 ## ログ
 
@@ -196,7 +198,7 @@ prompt のテキストは、送られたまま保存されます。`trigger.inge
 
 `max concurrency <n> reached` は設定の `max_concurrency` です（既定 4）。`starting` または `running` の Worker を数えます。
 
-クラッシュのあと、`tigercat list --json` は自分で回復を実行し、Worker は `interrupted` と出ます。そのあとで `tigercat acp` を起動するか、`acp` を直接起動して同じ回復をさせてください。古い ACP セッション id が使えるとは期待しないでください。
+クラッシュのあと、`tigercat list --json` は自分で回復を実行します。読み込める Worker は `idle` に戻り、読み込めない Worker は `lost` と出ます。そのあとで `tigercat acp` を起動するか、`acp` を直接起動して同じ回復をさせてください。`session/load` が成功したときは、元の ACP session id が残っています。失敗したときは、古い id が使えるとは期待しないでください。
 
 二つの `tigercat acp` プロセスが一つの sqlite ファイルを指していたら、両方止めてください。このコードは、二人の書き手が使ったデータベースを修復しません。
 
@@ -207,7 +209,7 @@ prompt のテキストは、送られたまま保存されます。`trigger.inge
 - Router の実行ファイルは無く、そのインストール手順もありません。他に何もインストールしないときに動く Router は、プロセス内のスクリプト化された brain だけです。
 - DeepSeek Chat Completions Router は実装されています（`router.provider = "deepseek"`、鍵は `DEEPSEEK_API_KEY`）。実機テストはしていません。既定はスクリプト化された brain のままです。
 - 既定の worker runtime 名 `worker` は組み込みではありません。
-- `session/load` はオフです。再起動は Worker の ACP セッションを再開せず、保存された pid も回収しません。SIGINT と SIGTERM にハンドラはありません。
+- 再起動は下流の `session/load` を試します。stdio stub は、読み込み成功、`loadSession` を宣言しない runtime、`session/load` の失敗を覆います。本物の Claude Code や Codex には当てていません。SIGINT と SIGTERM には今もハンドラがありません。
 - `session.pid` は worker のハンドシェイクが返ったあとに書かれます。この pull request はそこを変えず、待ちも足しません。pid を早く読みすぎる Windows のテストは、開発中のプロセス起動レースです。
 - データベースごとに `node:sqlite` の handle は一つです。二人目の書き手は調整されません。
 - prompt のテキストは送られたまま保存されます。

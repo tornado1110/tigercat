@@ -17,8 +17,8 @@
 | `coordinator_runtime` 留空时的脚本化 Router | 已用进程内的脚本化 brain 测试过 |
 | `coordinator_runtime` 点名的 ACP Router 进程 | 已实现（`launchCoordinator`）；没有对着真实模型跑过 |
 | sqlite 里的 Thread、事件日志和未送达的 Router 队列在新进程里还在 | 已实现，在 `Engine.start` 里 |
-| Worker 的 ACP 会话在重启后还在 | 未实现；对外声明 `loadSession` 为 false |
-| 下次启动时回收孤儿 worker 进程 | 未实现 |
+| Worker 的 ACP 会话在重启后还在 | 下游 runtime 在 `initialize` 里声明 `loadSession` 并且 `session/load` 成功时，恢复原来的 ACP session id，Thread 订阅留着。否则 Worker 标成 `lost`，并记一条 `worker.lost`。用 stdio stub 测过，没有对着 Claude Code 或 Codex 跑过 |
+| 下次启动时回收孤儿 worker 进程 | 已实现。记录的 pid 如果命令行还对得上这个 runtime，恢复前会杀掉。用 stdio stub 测过。Windows 上只有读得到命令行并且对得上时才杀 |
 | TigerCat 内部的飞书或钉钉 | 未实现；那些频道留在宿主里 |
 | DeepSeek Chat Completions Router（`router.provider = "deepseek"`） | 已实现；读取 `DEEPSEEK_API_KEY`；未做实机测试 |
 
@@ -148,7 +148,7 @@ JSON 报告里是 `mode` `dry-run` 和 `vendorExecuted` false。真实 adapter �
 
 这条路径还会在 500ms 后安排 `process.exit(0)`，并在上游 MCP 客户端都关掉时再安排一次。Worker 的拆除在这个窗口里是尽力而为。它不是保证排空。
 
-这段代码里 SIGINT 和 SIGTERM 没有处理函数。在 POSIX 上，worker 进程是 detached 启动的，所以只杀死 TigerCat 进程的信号会把它们留在后面。下次启动不看保存的 pid，也不杀它们。
+这段代码里 SIGINT 和 SIGTERM 没有处理函数。在 POSIX 上，worker 进程是 detached 启动的，所以只杀死 TigerCat 进程的信号会把它们留在后面。下次启动会看保存的 pid。命令行还对得上这个 runtime 的孤儿进程会在恢复前被杀掉。
 
 ## 重启和恢复
 
@@ -158,17 +158,19 @@ JSON 报告里是 `mode` `dry-run` 和 `vendorExecuted` false。真实 adapter �
 
 - 已有的 Router 会话行留在原地，或者插入一行
 - 把还在途中的 Router 队列行退回 pending，并把 `router_busy` 设为 `0`
-- 把每个非终态 Worker 标成 `interrupted`，丢掉它的订阅，并记一条 `worker.error`，内容是 `worker process was not alive after restart`
+- 对每个非终态 Worker，先处理记录的 pid。命令行还对得上 runtime 的活进程会被杀掉。然后，如果这个 runtime 声明了 `loadSession` 并且 `session/load` 成功，就在新进程里加载原来的 ACP session id，Worker 回到 `idle`，Thread 订阅保留，下一条事件直接交给这个 Worker。如果没有 session id、runtime 不声明 `loadSession`，或 `session/load` 失败，就把 Worker 标成 `lost`，丢掉订阅，并记一条 `worker.lost`。`code` 是 `lost`，`message` 是 `worker session could not be restored after restart`，`reason` 是 `no_session`、`load_unsupported`、`load_failed` 或 `session_mismatch`
 
 Thread 和事件日志还在。worktree 目录留在磁盘上。`removeWorkspace` 存在，但这条路径不调用它。
 
+`interrupted` 仍是合法状态。自动恢复不再写它。`resume` 接受 `lost` 和 `interrupted`：用调用方给出的新输入，在原来的 worktree 上开一个新的 ACP session。这不是 `session/load`。
+
 不会发生的事：
 
-- 不调用 `session/load`。上游 agent 声明 `loadSession: false`。`runtime test` 报告 `degraded: ["loadSession"]`。Worker 不能恢复上一次 ACP 会话。
-- 不回收保存的 pid。
-- 回合中途的 Worker 不会续上。它的 Thread 重新走 Router，因为订阅已经释放。
+- 上游的 TigerCat agent 仍然声明 `loadSession: false`。`runtime test` 仍然报告 `degraded: ["loadSession"]`，因为它只做 `session/new`，不调用 `session/load`。
+- 死掉的进程不会继续显示为 `running` 或 `starting`。状态是这两个值时，记录的 pid 必须还活着。
+- 加载失败时不会悄悄新建一个 ACP session。那是 `resume` 做的事。
 
-一次性命令 `list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe`、`unsubscribe` 和 `spawn` 会打开同一个数据库，并自己调用 `Engine.start`。对一个还有非终态 Worker 的数据库跑 `tigercat list`，会把那些 Worker 标成 interrupted，哪怕另一个 `tigercat acp` 还握着它们。不要把这些命令指向正在运行的进程的数据库。没有只读的状态命令。
+一次性命令 `list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe`、`unsubscribe` 和 `spawn` 会打开同一个数据库，并自己调用 `Engine.start`。对一个还有非终态 Worker 的数据库跑 `tigercat list`，会恢复能 `session/load` 的 Worker，并把其余的标成 `lost`，哪怕另一个 `tigercat acp` 还握着它们。不要把这些命令指向正在运行的进程的数据库。没有只读的状态命令。
 
 ## 日志
 
@@ -195,7 +197,7 @@ prompt 文本按提交时的原样保存。`trigger.ingested` 不复制那段文
 
 `max concurrency <n> reached` 是配置里的 `max_concurrency`（默认 4）。它计算处于 `starting` 或 `running` 的 Worker。
 
-崩溃之后，`tigercat list --json` 自己会跑恢复，Worker 会显示 `interrupted`。在那之后再启动 `tigercat acp`，或者直接启动 `acp` 让它做同样的恢复。不要指望旧的 ACP 会话 id 还能用。
+崩溃之后，`tigercat list --json` 自己会跑恢复。能加载的 Worker 回到 `idle`，不能加载的显示 `lost`。在那之后再启动 `tigercat acp`，或者直接启动 `acp` 让它做同样的恢复。`session/load` 成功时，原来的 ACP session id 还在。失败时不要指望旧 id 还能用。
 
 如果两个 `tigercat acp` 进程指向同一个 sqlite 文件，把两个都停掉。这段代码不会修复两个写入者用过的数据库。
 
@@ -206,7 +208,7 @@ prompt 文本按提交时的原样保存。`trigger.ingested` 不复制那段文
 - 没有 Router 可执行文件，也没有它的安装步骤。什么都不再装时，唯一会跑的 Router 是进程内的脚本化 brain。
 - DeepSeek Chat Completions Router 已实现（`router.provider = "deepseek"`，密钥来自 `DEEPSEEK_API_KEY`）。它没有做过实机测试。默认仍然是脚本化 brain。
 - 默认的 worker runtime 名字 `worker` 不是内置的。
-- `session/load` 是关的。重启不会恢复 Worker 的 ACP 会话，也不会回收保存的 pid。SIGINT 和 SIGTERM 没有处理函数。
+- 重启会尝试下游 `session/load`。stdio stub 覆盖了加载成功、不声明 `loadSession`，以及 `session/load` 失败。没有对着真实的 Claude Code 或 Codex 跑过。SIGINT 和 SIGTERM 仍然没有处理函数。
 - `session.pid` 在 worker 握手返回之后才写入。这个 pull request 没有改这一点，也没有加等待。过早读取 pid 的 Windows 测试，是开发阶段的进程启动竞态。
 - 每个数据库一个 `node:sqlite` handle。第二个写入者不被协调。
 - prompt 文本按提交时的原样保存。
