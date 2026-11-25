@@ -49,13 +49,13 @@ const connection = acp
       const pidFile = process.env.TIGERCAT_LEAK_PIDFILE;
       if (pidFile && child.pid) writeFileSync(pidFile, String(child.pid));
     }
-    const sessionId = scenario === "session-load" ? mintLoadableSession() : "stub-session";
+    const sessionId = scenario === "session-load" || scenario === "session-load-hang" ? mintLoadableSession() : "stub-session";
     sessions.set(sessionId, { pending: null });
     void params;
     return { sessionId, configOptions: [{ id: "model", name: "Model", category: "model", type: "select" as const, currentValue: "test-model", options: [{ value: "test-model", name: "Test Model" }] }] };
   })
   .onRequest(acp.methods.agent.session.load, ({ params }) => {
-    if (scenario !== "session-load") throw acp.RequestError.methodNotFound("session/load");
+    if (scenario !== "session-load" && scenario !== "session-load-hang") throw acp.RequestError.methodNotFound("session/load");
     const expected = persistedSessionId();
     if (!expected || params.sessionId !== expected) {
       throw acp.RequestError.invalidParams(undefined, "unknown session");
@@ -97,7 +97,7 @@ const connection = acp
       await chunk(client, params.sessionId, "ignoring cancellation");
       await new Promise<void>(() => undefined);
     }
-    if (scenario === "hang") {
+    if (scenario === "hang" || scenario === "session-load-hang") {
       await chunk(client, params.sessionId, "hanging");
       await never(pending.signal);
     }

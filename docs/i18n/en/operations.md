@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 43016f20a1a6551c9cc56c01a932d9b34db92d14 -->
+<!-- i18n-source: docs/operations.md @ 516d8b788e91768da9cb776ed995b8b93dcf06d5 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Operating TigerCat
@@ -24,7 +24,7 @@ are marked tested.
 | Scripted Router when `coordinator_runtime` is unset | tested with the in-process scripted brain |
 | ACP Router process named by `coordinator_runtime` | implemented (`launchCoordinator`); not run against a real model |
 | sqlite Threads, event log, and pending Router queue survive a new process | implemented in `Engine.start` |
-| Worker ACP sessions survive a restart | the built-in `claude-code` and `codex` profiles do not advertise `loadSession`. A restart on them marks the Worker `lost`, records `worker.lost`, and returns the subscription to the Router. The original ACP session id and the subscription stay only when that runtime itself advertises `loadSession` and `session/load` succeeds. That success path was tested with the stdio stub only, not against real Claude Code or Codex |
+| Worker ACP sessions survive a restart | the built-in `claude-code` and `codex` profiles do not advertise `loadSession`. A restart on them marks the Worker `lost`, records `worker.lost`, and returns the subscription to the Router. The original ACP session id and the subscription stay only when the turn had already finished (`idle` or `awaiting_input`) and that runtime advertises `loadSession` and `session/load` succeeds. A `running` or `starting` turn has no result, so it is `lost` with reason `in_flight_turn` even if `session/load` would succeed. The success path was tested with the stdio stub only, not against real Claude Code or Codex |
 | Orphan worker processes reaped on the next start | implemented. A recorded pid whose command line still matches that runtime is killed before recovery. Tested with the stdio stub. On Windows a process is killed only when its command line can be read and matches |
 | Feishu or DingTalk inside TigerCat | not implemented; those channels stay in the host |
 | DeepSeek Chat Completions Router (`router.provider = "deepseek"`) | implemented; reads `DEEPSEEK_API_KEY`; not live-tested |
@@ -239,16 +239,20 @@ the same config and database.
 - leaves an existing Router session row in place, or inserts one
 - returns in-flight Router queue rows to pending and sets `router_busy` to `0`
 - for each non-terminal Worker, handles the recorded pid first. A live
-  process whose command line still matches the runtime is killed. Then, if
-  that runtime advertises `loadSession` and `session/load` succeeds, the
-  original ACP session id is loaded in a new process, the Worker returns to
-  `idle`, the Thread subscription stays, and the next event goes straight to
-  that Worker. If there is no session id, the runtime does not advertise
-  `loadSession`, or `session/load` fails, the Worker is marked `lost`, its
-  subscriptions are dropped, and a `worker.lost` event is recorded. `code` is
-  `lost`, `message` is `worker session could not be restored after restart`,
-  and `reason` is `no_session`, `load_unsupported`, `load_failed`, or
-  `session_mismatch`
+  process whose command line still matches the runtime is killed. A Worker in
+  `running` or `starting` has no turn result: it is marked `lost`, a
+  `worker.lost` event is recorded with `reason` `in_flight_turn` and
+  `message` `in-flight turn was lost on restart`, the subscription is
+  released, and the next event goes to the Router. A successful `session/load`
+  does not move that Worker to `idle`. When the turn had already finished
+  (`idle` or `awaiting_input`) and the runtime advertises `loadSession` and
+  `session/load` succeeds, the original ACP session id is loaded in a new
+  process, the state stays as it was, the Thread subscription stays, and the
+  next event goes straight to that Worker. No session id, no `loadSession`
+  advertisement, or a failed `session/load` also marks the Worker `lost` and
+  drops the subscription. `code` is `lost`. The other `reason` values are
+  `no_session`, `load_unsupported`, `load_failed`, or `session_mismatch`, and
+  that `message` is `worker session could not be restored after restart`
 
 Threads and the event log remain. The worktree directory is left on disk.
 `removeWorkspace` exists and is not called on this path.
@@ -256,8 +260,8 @@ Threads and the event log remain. The worktree directory is left on disk.
 The built-in `claude-code` and `codex` profiles do not advertise `loadSession`.
 On them, restart takes the `lost` path and the subscription returns to the
 Router. Keeping the subscription, as described above, happens only when the
-runtime itself advertises `loadSession` and `session/load` succeeds. That path
-has been checked with the stdio stub only.
+turn had already finished and the runtime itself advertises `loadSession` and
+`session/load` succeeds. That path has been checked with the stdio stub only.
 
 `interrupted` is reserved for an explicit interrupt. Restart does not write
 it. `interrupt` cancels the current turn and keeps subscriptions; it does not
@@ -328,11 +332,13 @@ in the config file that was loaded. Check `--config` and `TIGERCAT_CONFIG`.
 `max concurrency <n> reached` is `max_concurrency` in the config (default 4).
 It counts Workers in `starting` or `running`.
 
-After a crash, `tigercat list --json` will itself run recovery. A Worker that
-can be loaded returns to `idle`; one that cannot is shown as `lost`. Start
+After a crash, `tigercat list --json` will itself run recovery. A Worker whose
+turn had already finished and whose `session/load` succeeds stays `idle` or
+`awaiting_input`. A Worker that was still in a turn is shown as `lost`. Start
 `tigercat acp` only after that, or start `acp` directly and let it do the same
-recovery. When `session/load` succeeds, the original ACP session id is still
-there. When it fails, do not expect the old id to work.
+recovery. The original ACP session id is still there only when the turn had
+finished and `session/load` succeeds. When load fails, or the turn was in
+flight, do not expect the old id to work.
 
 If two `tigercat acp` processes were pointed at one sqlite file, stop both.
 The code does not repair a database that two writers used.

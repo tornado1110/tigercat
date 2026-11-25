@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 43016f20a1a6551c9cc56c01a932d9b34db92d14 -->
+<!-- i18n-source: docs/operations.md @ 516d8b788e91768da9cb776ed995b8b93dcf06d5 -->
 > 간체 중국어판이 기준입니다. 이 번역은 원문보다 늦을 수 있으며, 기계 번역의 도움을 받았습니다. 수정은 환영합니다.
 
 # TigerCat 운영
@@ -20,7 +20,7 @@
 | `coordinator_runtime`이 비어 있을 때의 스크립트 Router | 프로세스 안의 스크립트 brain으로 테스트됨 |
 | `coordinator_runtime`이 가리키는 ACP Router 프로세스 | 구현됨(`launchCoordinator`). 실제 모델에 대해서는 실행하지 않음 |
 | sqlite의 Thread, 이벤트 로그, 아직 전달되지 않은 Router 큐가 새 프로세스에도 남는다 | `Engine.start`에 구현됨 |
-| Worker의 ACP 세션이 재시작 뒤에도 남는다 | 내장 `claude-code`와 `codex`는 `loadSession`을 알리지 않는다. 그 위에서의 재시작은 Worker를 `lost`로 표시하고 `worker.lost`를 기록하며 구독은 Router로 돌아간다. runtime 자신이 `loadSession`을 알리고 `session/load`가 성공할 때만 원래 ACP session id와 구독이 남는다. 이 성공 경로는 stdio stub으로만 테스트했고, 실제 Claude Code나 Codex에 대해서는 실행하지 않았다 |
+| Worker의 ACP 세션이 재시작 뒤에도 남는다 | 내장 `claude-code`와 `codex`는 `loadSession`을 알리지 않는다. 그 위에서의 재시작은 Worker를 `lost`로 표시하고 `worker.lost`를 기록하며 구독은 Router로 돌아간다. 턴이 이미 끝났고(`idle` 또는 `awaiting_input`) runtime 자신이 `loadSession`을 알리고 `session/load`가 성공할 때만 원래 ACP session id와 구독이 남는다. `running`이나 `starting` 턴에는 결과가 없으므로 `session/load`가 되어도 `lost`이며 `reason`은 `in_flight_turn`이다. 성공 경로는 stdio stub으로만 테스트했고, 실제 Claude Code나 Codex에 대해서는 실행하지 않았다 |
 | 다음 시작 때 고아 worker 프로세스를 거둔다 | 구현됨. 기록된 pid의 명령줄이 아직 그 runtime과 맞으면 복구 전에 죽인다. stdio stub으로 테스트했다. Windows에서는 명령줄을 읽을 수 있고 맞을 때만 죽인다 |
 | TigerCat 안의 Feishu 또는 DingTalk | 구현되지 않음. 그 채널은 호스트에 남는다 |
 | DeepSeek Chat Completions Router(`router.provider = "deepseek"`) | 구현됨. `DEEPSEEK_API_KEY`를 읽는다. 실기 테스트는 하지 않음 |
@@ -159,11 +159,11 @@ stop 하위 명령은 없습니다.
 
 - 있는 Router 세션 행은 그대로 두거나, 하나 넣는다
 - 진행 중인 Router 큐 행을 pending으로 되돌리고 `router_busy`를 `0`으로 둔다
-- 종료 상태가 아닌 Worker마다 기록된 pid를 먼저 다룬다. 명령줄이 runtime과 아직 맞는 살아 있는 프로세스는 죽인다. 그다음, 그 runtime이 `loadSession`을 알리고 `session/load`가 성공하면 새 프로세스에서 원래 ACP session id를 읽는다. Worker는 `idle`로 돌아가고 Thread 구독은 남으며, 다음 이벤트는 그 Worker에게 직접 간다. session id가 없거나, runtime이 `loadSession`을 알리지 않거나, `session/load`가 실패하면 Worker를 `lost`로 표시하고 구독을 놓으며 `worker.lost`를 기록한다. `code`는 `lost`이고, `message`는 `worker session could not be restored after restart`이며, `reason`은 `no_session`, `load_unsupported`, `load_failed`, `session_mismatch` 중 하나다
+- 종료 상태가 아닌 Worker마다 기록된 pid를 먼저 다룬다. 명령줄이 runtime과 아직 맞는 살아 있는 프로세스는 죽인다. 상태가 `running` 또는 `starting`이면 그 턴에 결과가 없다. Worker는 `lost`가 되고 `worker.lost`를 기록한다. `reason`은 `in_flight_turn`이고 `message`는 `in-flight turn was lost on restart`이다. 구독은 놓이며 다음 이벤트는 Router로 간다. `session/load`가 성공해도 그 Worker를 `idle`로 바꾸지 않는다. 턴이 이미 끝났고(`idle` 또는 `awaiting_input`) runtime이 `loadSession`을 알리고 `session/load`가 성공하면, 새 프로세스에서 원래 ACP session id를 읽고 상태는 그대로 두며 Thread 구독은 남고 다음 이벤트는 그 Worker에게 직접 간다. session id가 없거나 runtime이 `loadSession`을 알리지 않거나 `session/load`가 실패해도 `lost`로 표시하고 구독을 놓는다. `code`는 `lost`이다. 다른 `reason`은 `no_session`, `load_unsupported`, `load_failed`, `session_mismatch`이고 그 `message`는 `worker session could not be restored after restart`이다
 
 Thread와 이벤트 로그는 남습니다. worktree 디렉터리는 디스크에 남습니다. `removeWorkspace`는 있지만 이 경로에서는 호출하지 않습니다.
 
-내장 `claude-code`와 `codex`는 `loadSession`을 알리지 않습니다. 그 위에서는 재시작이 `lost`가 되고 구독은 Router로 돌아갑니다. 위에서 구독을 남긴다고 한 것은 runtime 자신이 `loadSession`을 알리고 `session/load`가 성공할 때뿐이며, 지금은 stdio stub으로만 확인했습니다.
+내장 `claude-code`와 `codex`는 `loadSession`을 알리지 않습니다. 그 위에서는 재시작이 `lost`가 되고 구독은 Router로 돌아갑니다. 위에서 구독을 남긴다고 한 것은 턴이 이미 끝났고 runtime 자신이 `loadSession`을 알리고 `session/load`가 성공할 때뿐이며, 지금은 stdio stub으로만 확인했습니다.
 
 `interrupted`는 명시적 interrupt를 위한 상태입니다. 재시작은 이 상태를 쓰지 않습니다. `interrupt`는 현재 턴을 취소하고 구독은 유지합니다. Worker를 `lost`로 표시하지 않습니다. `resume`은 이미 `lost` 또는 `interrupted`인 Worker를 받습니다. 호출자가 준 새 입력으로 원래 worktree에 새 ACP session을 엽니다. 이것은 `session/load`가 아닙니다.
 
@@ -200,7 +200,7 @@ prompt 텍스트는 제출된 그대로 저장됩니다. `trigger.ingested`는 �
 
 `max concurrency <n> reached`는 설정의 `max_concurrency`입니다(기본 4). `starting` 또는 `running`인 Worker를 셉니다.
 
-충돌 뒤 `tigercat list --json`은 스스로 복구를 실행합니다. 불러올 수 있는 Worker는 `idle`로 돌아가고, 불러올 수 없는 Worker는 `lost`로 나옵니다. 그다음에 `tigercat acp`를 시작하거나, `acp`를 직접 시작해서 같은 복구를 하게 하세요. `session/load`가 성공하면 원래 ACP session id가 남아 있습니다. 실패하면 예전 id가 동작할 것이라고 기대하지 마세요.
+충돌 뒤 `tigercat list --json`은 스스로 복구를 실행합니다. 턴이 이미 끝났고 `session/load`가 성공한 Worker는 원래의 `idle` 또는 `awaiting_input`으로 남습니다. 아직 턴 중이던 Worker는 `lost`로 나옵니다. 그다음에 `tigercat acp`를 시작하거나, `acp`를 직접 시작해서 같은 복구를 하게 하세요. 원래 ACP session id가 남는 것은 턴이 끝났고 `session/load`가 성공했을 때뿐입니다. 실패하거나 턴이 진행 중이었다면 예전 id가 동작할 것이라고 기대하지 마세요.
 
 두 `tigercat acp` 프로세스가 하나의 sqlite 파일을 가리켰다면 둘 다 멈추세요. 이 코드는 쓰는 쪽이 둘인 데이터베이스를 고치지 않습니다.
 

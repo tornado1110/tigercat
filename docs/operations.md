@@ -17,7 +17,7 @@
 | `coordinator_runtime` 留空时的脚本化 Router | 已用进程内的脚本化 brain 测试过 |
 | `coordinator_runtime` 点名的 ACP Router 进程 | 已实现（`launchCoordinator`）；没有对着真实模型跑过 |
 | sqlite 里的 Thread、事件日志和未送达的 Router 队列在新进程里还在 | 已实现，在 `Engine.start` 里 |
-| Worker 的 ACP 会话在重启后还在 | 内置的 `claude-code` 和 `codex` 不声明 `loadSession`。在它们上面重启会把 Worker 标成 `lost`，记一条 `worker.lost`，订阅回到 Router。只有 runtime 自己声明 `loadSession` 且 `session/load` 成功时，才恢复原来的 ACP session id 并留下订阅。这条成功路径只用 stdio stub 测过，没有对着真实的 Claude Code 或 Codex 跑过 |
+| Worker 的 ACP 会话在重启后还在 | 内置的 `claude-code` 和 `codex` 不声明 `loadSession`。在它们上面重启会把 Worker 标成 `lost`，记一条 `worker.lost`，订阅回到 Router。回合已经结束（`idle` 或 `awaiting_input`）且 runtime 自己声明 `loadSession` 并且 `session/load` 成功时，才恢复原来的 ACP session id 并留下订阅。`running` 或 `starting` 的回合没有结果，即使能 `session/load` 也标成 `lost`，`reason` 是 `in_flight_turn`。成功路径只用 stdio stub 测过，没有对着真实的 Claude Code 或 Codex 跑过 |
 | 下次启动时回收孤儿 worker 进程 | 已实现。记录的 pid 如果命令行还对得上这个 runtime，恢复前会杀掉。用 stdio stub 测过。Windows 上只有读得到命令行并且对得上时才杀 |
 | TigerCat 内部的飞书或钉钉 | 未实现；那些频道留在宿主里 |
 | DeepSeek Chat Completions Router（`router.provider = "deepseek"`） | 已实现；读取 `DEEPSEEK_API_KEY`；未做实机测试 |
@@ -158,11 +158,11 @@ JSON 报告里是 `mode` `dry-run` 和 `vendorExecuted` false。真实 adapter �
 
 - 已有的 Router 会话行留在原地，或者插入一行
 - 把还在途中的 Router 队列行退回 pending，并把 `router_busy` 设为 `0`
-- 对每个非终态 Worker，先处理记录的 pid。命令行还对得上 runtime 的活进程会被杀掉。然后，如果这个 runtime 声明了 `loadSession` 并且 `session/load` 成功，就在新进程里加载原来的 ACP session id，Worker 回到 `idle`，Thread 订阅保留，下一条事件直接交给这个 Worker。如果没有 session id、runtime 不声明 `loadSession`，或 `session/load` 失败，就把 Worker 标成 `lost`，丢掉订阅，并记一条 `worker.lost`。`code` 是 `lost`，`message` 是 `worker session could not be restored after restart`，`reason` 是 `no_session`、`load_unsupported`、`load_failed` 或 `session_mismatch`
+- 对每个非终态 Worker，先处理记录的 pid。命令行还对得上 runtime 的活进程会被杀掉。状态是 `running` 或 `starting` 时，这一轮没有结果：Worker 标成 `lost`，记一条 `worker.lost`，`reason` 是 `in_flight_turn`，`message` 是 `in-flight turn was lost on restart`，订阅释放，下一条事件走 Router。这时不因为 `session/load` 成功就把 Worker 改成 `idle`。回合已经结束（`idle` 或 `awaiting_input`）并且 runtime 声明了 `loadSession` 且 `session/load` 成功时，才在新进程里加载原来的 ACP session id，状态保持不变，Thread 订阅保留，下一条事件直接交给这个 Worker。没有 session id、runtime 不声明 `loadSession`，或 `session/load` 失败时，也标成 `lost` 并丢掉订阅。`code` 是 `lost`，其余 `reason` 是 `no_session`、`load_unsupported`、`load_failed` 或 `session_mismatch`，`message` 是 `worker session could not be restored after restart`
 
 Thread 和事件日志还在。worktree 目录留在磁盘上。`removeWorkspace` 存在，但这条路径不调用它。
 
-内置的 `claude-code` 和 `codex` 不声明 `loadSession`。在它们上面，重启走 `lost`，订阅回到 Router。上面说的留下订阅，只发生在 runtime 自己声明了 `loadSession` 且 `session/load` 成功的时候，目前只用 stdio stub 验证过。
+内置的 `claude-code` 和 `codex` 不声明 `loadSession`。在它们上面，重启走 `lost`，订阅回到 Router。上面说的留下订阅，只发生在回合已经结束、并且 runtime 自己声明了 `loadSession` 且 `session/load` 成功的时候，目前只用 stdio stub 验证过。
 
 `interrupted` 留给显式 interrupt，重启不写这个状态。`interrupt` 取消当前回合并保留订阅，不会把 Worker 标成 `lost`。`resume` 接受已经处于 `lost` 或 `interrupted` 的 Worker：用调用方给出的新输入，在原来的 worktree 上开一个新的 ACP session。这不是 `session/load`。
 
@@ -199,7 +199,7 @@ prompt 文本按提交时的原样保存。`trigger.ingested` 不复制那段文
 
 `max concurrency <n> reached` 是配置里的 `max_concurrency`（默认 4）。它计算处于 `starting` 或 `running` 的 Worker。
 
-崩溃之后，`tigercat list --json` 自己会跑恢复。能加载的 Worker 回到 `idle`，不能加载的显示 `lost`。在那之后再启动 `tigercat acp`，或者直接启动 `acp` 让它做同样的恢复。`session/load` 成功时，原来的 ACP session id 还在。失败时不要指望旧 id 还能用。
+崩溃之后，`tigercat list --json` 自己会跑恢复。回合已经结束并且 `session/load` 成功的 Worker 保持原来的 `idle` 或 `awaiting_input`。还在回合中的 Worker 显示 `lost`。在那之后再启动 `tigercat acp`，或者直接启动 `acp` 让它做同样的恢复。只有回合已经结束且 `session/load` 成功时，原来的 ACP session id 还在。失败或回合中断时不要指望旧 id 还能用。
 
 如果两个 `tigercat acp` 进程指向同一个 sqlite 文件，把两个都停掉。这段代码不会修复两个写入者用过的数据库。
 

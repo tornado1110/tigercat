@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 43016f20a1a6551c9cc56c01a932d9b34db92d14 -->
+<!-- i18n-source: docs/operations.md @ 516d8b788e91768da9cb776ed995b8b93dcf06d5 -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat の操作
@@ -20,7 +20,7 @@
 | `coordinator_runtime` が未設定のときのスクリプト化された Router | プロセス内のスクリプト化された brain でテスト済み |
 | `coordinator_runtime` が名指しする ACP Router プロセス | 実装済み（`launchCoordinator`）。実モデルに対しては未実行 |
 | sqlite の Thread、イベントログ、未配送の Router キューが新しいプロセスを越えて残る | `Engine.start` に実装済み |
-| Worker の ACP セッションが再起動を越えて残る | 組み込みの `claude-code` と `codex` は `loadSession` を宣言しない。それらの上での再起動は Worker を `lost` にし、`worker.lost` を記録し、購読は Router に戻る。runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけ、元の ACP session id と購読が残る。この成功経路は stdio stub だけでテストし、本物の Claude Code や Codex には当てていない |
+| Worker の ACP セッションが再起動を越えて残る | 組み込みの `claude-code` と `codex` は `loadSession` を宣言しない。それらの上での再起動は Worker を `lost` にし、`worker.lost` を記録し、購読は Router に戻る。ターンがすでに終わっていて（`idle` または `awaiting_input`）、runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけ、元の ACP session id と購読が残る。`running` または `starting` のターンには結果がないので、`session/load` ができても `lost` になり、`reason` は `in_flight_turn` です。成功経路は stdio stub だけでテストし、本物の Claude Code や Codex には当てていない |
 | 次の起動で孤児の worker プロセスを回収する | 実装済み。記録された pid のコマンド行がまだその runtime と一致するなら、回復の前に殺す。stdio stub でテストした。Windows ではコマンド行が読めて一致するときだけ殺す |
 | TigerCat の中の Feishu または DingTalk | 未実装。それらのチャンネルはホスト側に残る |
 | DeepSeek Chat Completions Router（`router.provider = "deepseek"`） | 実装済み。`DEEPSEEK_API_KEY` を読む。実機テストはしていない |
@@ -159,11 +159,11 @@ stop サブコマンドはありません。
 
 - 既存の Router セッション行を残すか、一行挿入する
 - 処理中の Router キュー行を pending に戻し、`router_busy` を `0` にする
-- 終端でない Worker ごとに、まず記録された pid を扱う。コマンド行が runtime とまだ一致する生きたプロセスは殺す。そのあと、その runtime が `loadSession` を宣言し `session/load` が成功すれば、新しいプロセスで元の ACP session id を読み込む。Worker は `idle` に戻り、Thread の購読は残り、次のイベントはその Worker に直接渡る。session id が無い、runtime が `loadSession` を宣言しない、または `session/load` が失敗したときは、Worker を `lost` にし、購読を外し、`worker.lost` を記録する。`code` は `lost`、`message` は `worker session could not be restored after restart`、`reason` は `no_session`、`load_unsupported`、`load_failed`、`session_mismatch` のいずれか
+- 終端でない Worker ごとに、まず記録された pid を扱う。コマンド行が runtime とまだ一致する生きたプロセスは殺す。状態が `running` または `starting` のとき、そのターンに結果はない。Worker は `lost` になり、`worker.lost` を記録する。`reason` は `in_flight_turn`、`message` は `in-flight turn was lost on restart`。購読は外れ、次のイベントは Router に行く。`session/load` が成功しても、その Worker を `idle` にはしない。ターンがすでに終わっていて（`idle` または `awaiting_input`）、runtime が `loadSession` を宣言し `session/load` が成功したときだけ、新しいプロセスで元の ACP session id を読み込み、状態はそのまま、Thread の購読は残り、次のイベントはその Worker に直接渡る。session id が無い、runtime が `loadSession` を宣言しない、または `session/load` が失敗したときも `lost` にして購読を外す。`code` は `lost`。ほかの `reason` は `no_session`、`load_unsupported`、`load_failed`、`session_mismatch` で、その `message` は `worker session could not be restored after restart`
 
 Thread とイベントログは残ります。worktree ディレクトリはディスクに残ります。`removeWorkspace` は存在しますが、この経路では呼びません。
 
-組み込みの `claude-code` と `codex` は `loadSession` を宣言しません。それらの上では再起動は `lost` になり、購読は Router に戻ります。上で書いた購読を残すのは、runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけで、今は stdio stub でしか確認していません。
+組み込みの `claude-code` と `codex` は `loadSession` を宣言しません。それらの上では再起動は `lost` になり、購読は Router に戻ります。上で書いた購読を残すのは、ターンがすでに終わっていて、runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけで、今は stdio stub でしか確認していません。
 
 `interrupted` は明示的な interrupt のためのものです。再起動はこの状態を書きません。`interrupt` は現在のターンを取り消し、購読は残します。Worker を `lost` にはしません。`resume` はすでに `lost` または `interrupted` の Worker を受けます。呼び出し側が渡した新しい入力で、元の worktree に新しい ACP session を開きます。これは `session/load` ではありません。
 
@@ -200,7 +200,7 @@ prompt のテキストは、送られたまま保存されます。`trigger.inge
 
 `max concurrency <n> reached` は設定の `max_concurrency` です（既定 4）。`starting` または `running` の Worker を数えます。
 
-クラッシュのあと、`tigercat list --json` は自分で回復を実行します。読み込める Worker は `idle` に戻り、読み込めない Worker は `lost` と出ます。そのあとで `tigercat acp` を起動するか、`acp` を直接起動して同じ回復をさせてください。`session/load` が成功したときは、元の ACP session id が残っています。失敗したときは、古い id が使えるとは期待しないでください。
+クラッシュのあと、`tigercat list --json` は自分で回復を実行します。ターンがすでに終わり `session/load` が成功した Worker は、元の `idle` または `awaiting_input` のままです。まだターンの途中だった Worker は `lost` と出ます。そのあとで `tigercat acp` を起動するか、`acp` を直接起動して同じ回復をさせてください。元の ACP session id が残るのは、ターンが終わっていて `session/load` が成功したときだけです。失敗したとき、またはターンの途中だったときは、古い id が使えるとは期待しないでください。
 
 二つの `tigercat acp` プロセスが一つの sqlite ファイルを指していたら、両方止めてください。このコードは、二人の書き手が使ったデータベースを修復しません。
 

@@ -70,9 +70,76 @@ describe("restart recovery over stdio", () => {
       const lost = (await second.events()).find((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
       expect(lost?.payload).toMatchObject({
         code: "lost",
-        reason: "load_failed",
-        message: "worker session could not be restored after restart",
+        reason: "in_flight_turn",
+        message: "in-flight turn was lost on restart",
       });
+    } finally {
+      await second.close();
+      await secondStore.close();
+      await first.engine.close();
+      await first.store.close();
+    }
+  });
+
+  it("SIGKILL during a turn is lost even when session/load would succeed", async () => {
+    const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-midturn-"));
+    roots.push(scratch);
+    const env = {
+      TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
+      TIGERCAT_STUB_SESSION_LOG: path.join(scratch, "session-log"),
+    };
+    const first = await startStdioEngine("session-load-hang", env);
+    roots.push(first.root);
+    const spawned = await first.engine.spawn({
+      runtime: "session-load-hang",
+      prompt: "stay in the turn",
+      threads: ["feishu:eng:cli"],
+    });
+    const running = await waitForRunning(first.engine, spawned.workerId);
+    const before = await first.engine.store.getSession(spawned.workerId);
+    expect(before?.acpSessionId).toMatch(/^stub-load-/);
+    expect(await first.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(1);
+    expect(listedByOs(running.pid)).toBe(true);
+
+    const snapshot = path.join(first.root, "restart.sqlite");
+    snapshotDatabase(path.join(first.root, "state.sqlite"), snapshot);
+    expect(readSnapshot(snapshot, spawned.workerId).state).toBe("running");
+    process.kill(running.pid, "SIGKILL");
+    await waitUntilDead(running.pid);
+
+    const secondStore = SqliteStore.open(snapshot);
+    const config = defaultConfig();
+    config.defaultWorkerRuntime = "session-load-hang";
+    config.runtimes = [stubRuntime("session-load-hang", env)];
+    const second = new Engine({
+      store: secondStore,
+      clock: new SystemClock(),
+      config,
+      factory: new ProcessRuntimeFactory({ handshakeTimeoutMs: 8_000 }),
+      workspaceRoot: first.root,
+    });
+    try {
+      await second.start();
+      const recovered = await second.store.getSession(spawned.workerId);
+      expect(recovered?.state).toBe("lost");
+      const lost = (await second.events()).find((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
+      expect(lost?.payload).toMatchObject({
+        code: "lost",
+        reason: "in_flight_turn",
+        message: "in-flight turn was lost on restart",
+      });
+      expect(await second.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(0);
+      const follow = await second.ingest({
+        source: "feishu",
+        thread: "feishu:eng:cli",
+        author: "keith",
+        text: "continue after restart",
+        kind: "im.message",
+        timestamp: Date.now(),
+      });
+      expect(follow.deliveredTo).not.toContain(spawned.workerId);
+      expect(follow.router).toBe(true);
+      expect((await second.events()).some((event) => event.workerId === spawned.workerId && event.type === "worker.turn_end")).toBe(false);
     } finally {
       await second.close();
       await secondStore.close();
