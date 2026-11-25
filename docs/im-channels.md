@@ -34,7 +34,7 @@ tigercat feishu --cwd /absolute/path/to/repo --runtime feishu-worker
 
 正在执行时，继续在私聊发消息或在群里 @ 机器人，支持 ACP steering 的 Worker 会把补充指令并入同一轮。每条通过授权的消息在接收时显示 Typing，结束时换为 DONE，失败或取消时换为 CrossMark。本轮答案只回复发起消息一次。回复采用飞书 2.0 卡片，正文支持 Markdown，底部的「工作区」取自该渠道进程启动时的 `--cwd` 目录名，随后显示 Worker 内核和 ACP 会话报告的模型及思考档位。已结束的会话会用下一条消息开始新一轮。自定义 Worker 未声明 steering 能力时，补充消息在上一轮结束后单独执行并回复。不同会话可并行工作。
 
-进程重启后，内置 harness 不声明 `loadSession`，旧 Worker 标成 `lost`，发出 `worker.lost`，订阅回到 Router。下条新消息会创建 Worker，旧工作区保留。已接收但被重启打断的任务需用一条新消息提交。当前支持文本入站与卡片回复。
+进程重启后，内置 runtime 暂不恢复会话：不调用 `session/load`，旧 Worker 标成 `lost`（`worker.lost`，`reason` 是 `builtin_no_restore`），订阅回到 Router。锁定的 adapter 会声明 `loadSession: true`，这里还没有用上。下条新消息会创建 Worker，旧工作区保留。已接收但被重启打断的任务需用一条新消息提交。当前支持文本入站与卡片回复。
 
 ## 新增一个 IM 适配器
 

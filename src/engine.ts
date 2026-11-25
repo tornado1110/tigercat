@@ -12,7 +12,7 @@ import { TigerError } from "./errors.js";
 import { newId } from "./ids.js";
 import { decidePermission, type PermissionOption } from "./permissions.js";
 import { SecretRegistry } from "./redact.js";
-import { resolveRuntime } from "./builtins.js";
+import { builtinByName, resolveRuntime } from "./builtins.js";
 import { reapMatchingProcess, type LaunchContext, type RuntimeFactory, type RuntimeHandle } from "./runtime.js";
 import { spill } from "./spill.js";
 import { acceptsSend, assertTransition, isTerminal } from "./state.js";
@@ -206,7 +206,7 @@ interface LiveWorker {
  * This object only holds live process handles and timers.
  */
 function lostReason(error: unknown): string {
-  if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "session_mismatch" || error.code === "in_flight_turn")) {
+    if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "session_mismatch" || error.code === "in_flight_turn" || error.code === "builtin_no_restore")) {
     return error.code;
   }
   return "load_failed";
@@ -214,6 +214,7 @@ function lostReason(error: unknown): string {
 
 function lostMessage(reason: string): string {
   if (reason === "in_flight_turn") return "in-flight turn was lost on restart";
+  if (reason === "builtin_no_restore") return "built-in runtime does not restore sessions yet";
   return "worker session could not be restored after restart";
 }
 
@@ -351,6 +352,12 @@ export class Engine {
     if (this.closed) return;
     this.reapOrphan(session);
     if (this.closed) return;
+    // Built-in claude-code and codex adapters advertise loadSession, but
+    // restart does not call it yet. Every non-terminal built-in Worker is lost.
+    if (session.runtime && builtinByName(session.runtime)) {
+      await this.markLost(session, "builtin_no_restore");
+      return;
+    }
     // A prompt that had not finished has no result to restore. session/load
     // reloads the session id only, so leaving the Worker idle would drop the
     // turn with no end or error event.

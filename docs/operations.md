@@ -17,7 +17,7 @@
 | `coordinator_runtime` 留空时的脚本化 Router | 已用进程内的脚本化 brain 测试过 |
 | `coordinator_runtime` 点名的 ACP Router 进程 | 已实现（`launchCoordinator`）；没有对着真实模型跑过 |
 | sqlite 里的 Thread、事件日志和未送达的 Router 队列在新进程里还在 | 已实现，在 `Engine.start` 里 |
-| Worker 的 ACP 会话在重启后还在 | 内置的 `claude-code` 和 `codex` 不声明 `loadSession`。在它们上面重启会把 Worker 标成 `lost`，记一条 `worker.lost`，订阅回到 Router。回合已经结束（`idle` 或 `awaiting_input`）且 runtime 自己声明 `loadSession` 并且 `session/load` 成功时，才恢复原来的 ACP session id 并留下订阅。`running` 或 `starting` 的回合没有结果，即使能 `session/load` 也标成 `lost`，`reason` 是 `in_flight_turn`。成功路径只用 stdio stub 测过，没有对着真实的 Claude Code 或 Codex 跑过 |
+| Worker 的 ACP 会话在重启后还在 | 内置 runtime `claude-code` 和 `codex` 暂不恢复会话。锁定的 adapter `@agentclientprotocol/claude-agent-acp@0.108.0` 和 `@agentclientprotocol/codex-acp@2.7.0` 会声明 `loadSession: true`，但重启不为这两个名字调用 `session/load`。非终态内置 Worker 标成 `lost`，`reason` 是 `builtin_no_restore`，订阅回到 Router。非内置 runtime 在回合已结束且 `session/load` 成功时留下订阅；`running` 或 `starting` 是 `in_flight_turn`。只用 stdio stub 测过，没有对着真实 Claude Code 或 Codex 跑过 |
 | 下次启动时回收孤儿 worker 进程 | 已实现。记录的 pid 如果命令行还对得上这个 runtime，恢复前会杀掉。用 stdio stub 测过。Windows 上只有读得到命令行并且对得上时才杀 |
 | TigerCat 内部的飞书或钉钉 | 未实现；那些频道留在宿主里 |
 | DeepSeek Chat Completions Router（`router.provider = "deepseek"`） | 已实现；读取 `DEEPSEEK_API_KEY`；未做实机测试 |
@@ -162,7 +162,7 @@ JSON 报告里是 `mode` `dry-run` 和 `vendorExecuted` false。真实 adapter �
 
 Thread 和事件日志还在。worktree 目录留在磁盘上。`removeWorkspace` 存在，但这条路径不调用它。
 
-内置的 `claude-code` 和 `codex` 不声明 `loadSession`。在它们上面，重启走 `lost`，订阅回到 Router。上面说的留下订阅，只发生在回合已经结束、并且 runtime 自己声明了 `loadSession` 且 `session/load` 成功的时候，目前只用 stdio stub 验证过。
+内置 runtime `claude-code` 和 `codex` 暂不恢复会话。锁定的 adapter 会声明 `loadSession: true`，但重启不为这两个名字调用 `session/load`。非终态内置 Worker 标成 `lost`，`reason` 是 `builtin_no_restore`，订阅回到 Router。上面说的留下订阅，只发生在非内置 runtime、回合已经结束、并且 `session/load` 成功的时候，目前只用 stdio stub 验证过。真实 adapter 上的 `session/load` 以后另做。
 
 `interrupted` 留给显式 interrupt，重启不写这个状态。`interrupt` 取消当前回合并保留订阅，不会把 Worker 标成 `lost`。`resume` 接受已经处于 `lost` 或 `interrupted` 的 Worker：用调用方给出的新输入，在原来的 worktree 上开一个新的 ACP session。这不是 `session/load`。
 
@@ -210,7 +210,7 @@ prompt 文本按提交时的原样保存。`trigger.ingested` 不复制那段文
 - 没有 Router 可执行文件，也没有它的安装步骤。什么都不再装时，唯一会跑的 Router 是进程内的脚本化 brain。
 - DeepSeek Chat Completions Router 已实现（`router.provider = "deepseek"`，密钥来自 `DEEPSEEK_API_KEY`）。它没有做过实机测试。默认仍然是脚本化 brain。
 - 默认的 worker runtime 名字 `worker` 不是内置的。
-- 重启会尝试下游 `session/load`。内置的 `claude-code` 和 `codex` 不声明 `loadSession`，因此标成 `lost`，订阅回到 Router。stdio stub 覆盖了加载成功、不声明 `loadSession`，以及 `session/load` 失败。没有对着真实的 Claude Code 或 Codex 跑过。SIGINT 和 SIGTERM 仍然没有处理函数。
+- 内置 runtime `claude-code` 和 `codex` 暂不恢复会话，重启不调用 `session/load`，标成 `lost`（`reason` 是 `builtin_no_restore`）。锁定的 adapter 会声明 `loadSession: true`，这里还没有用上。非内置 runtime 会尝试 `session/load`。stdio stub 覆盖了加载成功、不声明 `loadSession`，以及 `session/load` 失败。没有对着真实的 Claude Code 或 Codex 跑过。SIGINT 和 SIGTERM 仍然没有处理函数。
 - `session.pid` 在 worker 握手返回之后才写入。这个 pull request 没有改这一点，也没有加等待。过早读取 pid 的 Windows 测试，是开发阶段的进程启动竞态。
 - 每个数据库一个 `node:sqlite` handle。第二个写入者不被协调。
 - prompt 文本按提交时的原样保存。

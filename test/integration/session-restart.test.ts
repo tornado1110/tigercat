@@ -10,6 +10,7 @@ import { Engine } from "../../src/engine.js";
 import { pidAlive, ProcessRuntimeFactory } from "../../src/runtime.js";
 import { SqliteStore } from "../../src/store.js";
 import { startStdioEngine, stubRuntime, waitForEvent } from "../harness/stdio-engine.js";
+import type { RuntimeConfig } from "../../src/types.js";
 
 /**
  * POSIX hand check (the test below is the CI evidence):
@@ -148,6 +149,60 @@ describe("restart recovery over stdio", () => {
     }
   });
 
+  it.each(["claude-code", "codex"] as const)(
+    "%s is lost on restart even when the process advertises session/load",
+    async (name) => {
+      const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-builtin-"));
+      roots.push(scratch);
+      const logFile = path.join(scratch, "session-log");
+      const env = {
+        TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
+        TIGERCAT_STUB_SESSION_LOG: logFile,
+      };
+      const runtime = { ...stubRuntime("session-load", env), name };
+      const first = await startNamedEngine(name, runtime, scratch);
+      roots.push(first.root);
+      const db = path.join(first.root, "state.sqlite");
+      const spawned = await first.engine.spawn({
+        runtime: name,
+        prompt: "finish before restart",
+        threads: ["feishu:eng:cli"],
+      });
+      await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+      expect((await first.engine.store.getSession(spawned.workerId))?.state).toBe("idle");
+      expect(await first.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(1);
+      await first.engine.close();
+      await first.store.close();
+
+      const second = await startNamedEngine(name, runtime, first.root, db);
+      try {
+        const recovered = await second.engine.store.getSession(spawned.workerId);
+        expect(recovered?.state).toBe("lost");
+        const lost = (await second.engine.events()).find((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
+        expect(lost?.payload).toMatchObject({
+          code: "lost",
+          reason: "builtin_no_restore",
+          message: "built-in runtime does not restore sessions yet",
+        });
+        expect(await second.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(0);
+        expect(readFileSync(logFile, "utf8")).not.toMatch(/^load /m);
+        const follow = await second.engine.ingest({
+          source: "feishu",
+          thread: "feishu:eng:cli",
+          author: "keith",
+          text: "continue after restart",
+          kind: "im.message",
+          timestamp: Date.now(),
+        });
+        expect(follow.deliveredTo).not.toContain(spawned.workerId);
+        expect(follow.router).toBe(true);
+      } finally {
+        await second.engine.close();
+        await second.store.close();
+      }
+    },
+  );
+
   it("session/load resumes the same ACP session and keeps direct routing", async () => {
     const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-load-"));
     roots.push(scratch);
@@ -215,6 +270,23 @@ describe("restart recovery over stdio", () => {
     }
   });
 });
+
+async function startNamedEngine(name: string, runtime: RuntimeConfig, workspaceRoot: string, db?: string) {
+  const root = db ? workspaceRoot : mkdtempSync(path.join(tmpdir(), "tigercat-stdio-"));
+  const store = SqliteStore.open(db ?? path.join(root, "state.sqlite"));
+  const config = defaultConfig();
+  config.defaultWorkerRuntime = name;
+  config.runtimes = [runtime];
+  const engine = new Engine({
+    store,
+    clock: new SystemClock(),
+    config,
+    factory: new ProcessRuntimeFactory({ handshakeTimeoutMs: 8_000 }),
+    workspaceRoot: root,
+  });
+  await engine.start();
+  return { engine, store, root };
+}
 
 function readSnapshot(file: string, workerId: string): { state: string; pid: number | null } {
   const db = new DatabaseSync(file, { readOnly: true });

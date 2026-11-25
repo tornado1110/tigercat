@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 516d8b788e91768da9cb776ed995b8b93dcf06d5 -->
+<!-- i18n-source: docs/operations.md @ bab639d97a785fce55517ce1c2f396e0b80957da -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Operating TigerCat
@@ -24,7 +24,7 @@ are marked tested.
 | Scripted Router when `coordinator_runtime` is unset | tested with the in-process scripted brain |
 | ACP Router process named by `coordinator_runtime` | implemented (`launchCoordinator`); not run against a real model |
 | sqlite Threads, event log, and pending Router queue survive a new process | implemented in `Engine.start` |
-| Worker ACP sessions survive a restart | the built-in `claude-code` and `codex` profiles do not advertise `loadSession`. A restart on them marks the Worker `lost`, records `worker.lost`, and returns the subscription to the Router. The original ACP session id and the subscription stay only when the turn had already finished (`idle` or `awaiting_input`) and that runtime advertises `loadSession` and `session/load` succeeds. A `running` or `starting` turn has no result, so it is `lost` with reason `in_flight_turn` even if `session/load` would succeed. The success path was tested with the stdio stub only, not against real Claude Code or Codex |
+| Worker ACP sessions survive a restart | built-in `claude-code` and `codex` runtimes do not restore sessions yet. The pinned adapters `@agentclientprotocol/claude-agent-acp@0.108.0` and `@agentclientprotocol/codex-acp@2.7.0` advertise `loadSession: true`, but restart does not call `session/load` for those names. Every non-terminal built-in Worker is `lost` with reason `builtin_no_restore` and the subscription returns to the Router. A non-built-in runtime keeps the subscription when the turn had finished and `session/load` succeeds; `running` or `starting` is `in_flight_turn`. Tested with the stdio stub only, not against real Claude Code or Codex |
 | Orphan worker processes reaped on the next start | implemented. A recorded pid whose command line still matches that runtime is killed before recovery. Tested with the stdio stub. On Windows a process is killed only when its command line can be read and matches |
 | Feishu or DingTalk inside TigerCat | not implemented; those channels stay in the host |
 | DeepSeek Chat Completions Router (`router.provider = "deepseek"`) | implemented; reads `DEEPSEEK_API_KEY`; not live-tested |
@@ -257,11 +257,14 @@ the same config and database.
 Threads and the event log remain. The worktree directory is left on disk.
 `removeWorkspace` exists and is not called on this path.
 
-The built-in `claude-code` and `codex` profiles do not advertise `loadSession`.
-On them, restart takes the `lost` path and the subscription returns to the
-Router. Keeping the subscription, as described above, happens only when the
-turn had already finished and the runtime itself advertises `loadSession` and
-`session/load` succeeds. That path has been checked with the stdio stub only.
+Built-in `claude-code` and `codex` runtimes do not restore sessions yet. The
+pinned adapters advertise `loadSession: true`, but restart does not call
+`session/load` for those names. Every non-terminal built-in Worker is `lost`
+with reason `builtin_no_restore`, and the subscription returns to the Router.
+Keeping the subscription, as described above, happens only for a non-built-in
+runtime whose turn had already finished and whose `session/load` succeeds.
+That path has been checked with the stdio stub only. Real-adapter `session/load`
+is later work.
 
 `interrupted` is reserved for an explicit interrupt. Restart does not write
 it. `interrupt` cancels the current turn and keeps subscriptions; it does not
@@ -353,12 +356,14 @@ like a Worker that never reaches `worker.turn_end`.
   runs with nothing else installed is the in-process scripted brain.
 - A DeepSeek Chat Completions Router is implemented (`router.provider = "deepseek"`, key from `DEEPSEEK_API_KEY`). It has not been live-tested. The scripted brain remains the default.
 - The default worker runtime name `worker` is not a built-in.
-- A restart tries downstream `session/load`. The built-in `claude-code` and
-  `codex` profiles do not advertise `loadSession`, so they are marked `lost`
-  and the subscription returns to the Router. The stdio stub covers a
-  successful load, a runtime that does not advertise `loadSession`, and a
-  failed `session/load`. This has not been run against real Claude Code or
-  Codex. SIGINT and SIGTERM still have no handler.
+- Built-in `claude-code` and `codex` runtimes do not restore sessions yet.
+  Restart does not call `session/load` for them and marks them `lost` with
+  reason `builtin_no_restore`. The pinned adapters advertise `loadSession:
+  true`, and that is not used yet. A non-built-in runtime does try
+  `session/load`. The stdio stub covers a successful load, a runtime that does
+  not advertise `loadSession`, and a failed `session/load`. This has not been
+  run against real Claude Code or Codex. SIGINT and SIGTERM still have no
+  handler.
 - `session.pid` is written after the worker handshake returns. This pull
   request does not change that, and it does not add a wait. A Windows test
   that reads the pid too early is a process-startup race for development.
