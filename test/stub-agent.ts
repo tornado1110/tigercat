@@ -55,6 +55,7 @@ const connection = acp
     return { sessionId, configOptions: [{ id: "model", name: "Model", category: "model", type: "select" as const, currentValue: "test-model", options: [{ value: "test-model", name: "Test Model" }] }] };
   })
   .onRequest(acp.methods.agent.session.load, ({ params }) => {
+    if (scenario === "session-load-fail") throw acp.RequestError.invalidParams(undefined, "session load failed");
     if (scenario !== "session-load" && scenario !== "session-load-hang") throw acp.RequestError.methodNotFound("session/load");
     const expected = persistedSessionId();
     if (!expected || params.sessionId !== expected) {
