@@ -56,7 +56,7 @@ The harness in `test/harness/` consumes the fixture JSONL schema (`id`, `ts`, `s
 5. **Push delivery** – result is pushed when the coordinator is idle, queued while it is busy, re-delivered after daemon restart.
 6. **Hooks** – a failing or slow user hook never blocks the bus.
 7. **Concurrency** – parallel workers get separate worktrees; overlapping edits are detected; max-concurrency is enforced. `kill` releases subscriptions and leaves no worker process; the worktree is kept for attach. A stop phrase only cancels the current turn and keeps subscriptions.
-8. **Recovery** – after restart, sessions resume via `session/load` or are marked interrupted and reported; orphan processes are reaped.
+8. **Recovery** – after restart, a Worker whose runtime supports `session/load` resumes that ACP session and keeps its Thread subscription. Otherwise it is marked `lost`, a `worker.lost` event is recorded, and the subscription is released. A recorded pid whose command line still matches the runtime is reaped. A dead pid is not left in `running`. `interrupted` remains a legal state; automatic recovery does not write it.
 9. **Safety** – the coordinator cannot edit code directly (enforced at the tool layer, tested); permission requests follow `--approve auto|ask|deny`, default `ask`, never auto-allow by accident; API keys never appear in logs or events.
 10. **CLI & install** – exit codes, stable `--json`, `--help`; fresh-machine `npx tigercat` smoke on Node 22.13+ and current LTS, macOS / Linux / Windows.
 

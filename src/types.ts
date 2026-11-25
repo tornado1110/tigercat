@@ -6,6 +6,7 @@ export const EVENT_TYPES = [
   "worker.permission_request",
   "worker.turn_end",
   "worker.error",
+  "worker.lost",
   "worker.stalled",
   "coordinator.turn_end",
   "trigger.ingested",
@@ -27,7 +28,8 @@ export type SessionState =
   | "error"
   | "killed"
   | "finished"
-  | "interrupted";
+  | "interrupted"
+  | "lost";
 
 export type PermissionPolicy = "auto" | "ask" | "deny";
 

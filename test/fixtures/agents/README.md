@@ -5,10 +5,9 @@ should behave for one failure or success mode. The files are data. They are
 not a test report, and they do not include results.
 
 `test/stub-agent.ts` does not read these files. The stdio integration suite
-executes the hardcoded scenarios named `ask-input`, `slow-stream`, and
-`huge-output`; the JSON files remain protocol documentation. The
-`no-session-load` restart path is still pending. These files are not a Claude
-Code, Codex, or Feishu end-to-end run.
+executes the hardcoded scenarios, including `no-session-load`, `session-load`,
+and `hang`. The JSON files remain protocol documentation. These files are not
+a Claude Code, Codex, or Feishu end-to-end run.
 
 TigerCat talks to Workers as an ACP client. These scenarios use ACP v1 method
 and field names from the [Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/overview):
@@ -88,6 +87,7 @@ action lists; the `selected` default in these files is `allow-once`.
 | `garbage-stdout.json` | After a valid handshake, writes non-JSON-RPC lines and hangs. |
 | `ignore-cancel.json` | Receives `session/cancel` but finishes with `end_turn` instead of `cancelled`. |
 | `no-session-load.json` | `agentCapabilities.loadSession` is false; `session/load` returns JSON-RPC `-32601`. |
+| `session-load.json` | `loadSession` is true. `session/new` mints a new id. `session/load` accepts only that id. |
 | `bad-handshake.json` | `initialize` returns `protocolVersion: 999` (version mismatch). |
 | `leak-child-process.json` | On `session/new`, spawns a detached `sleep 3600` and does not reap it. |
 

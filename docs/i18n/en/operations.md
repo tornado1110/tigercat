@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 3452da8c151a5f5df97290f28906e96d7143b976 -->
+<!-- i18n-source: docs/operations.md @ 96cd4319b7c7d2ddfbad8368770a3c95a94ce5cc -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Operating TigerCat
@@ -24,8 +24,8 @@ are marked tested.
 | Scripted Router when `coordinator_runtime` is unset | tested with the in-process scripted brain |
 | ACP Router process named by `coordinator_runtime` | implemented (`launchCoordinator`); not run against a real model |
 | sqlite Threads, event log, and pending Router queue survive a new process | implemented in `Engine.start` |
-| Worker ACP sessions survive a restart | not implemented; `loadSession` is advertised as false |
-| Orphan worker processes reaped on the next start | not implemented |
+| Worker ACP sessions survive a restart | when the downstream runtime advertises `loadSession` during `initialize` and `session/load` succeeds, the original ACP session id is restored and the Thread subscription stays. Otherwise the Worker is marked `lost` and a `worker.lost` event is recorded. Tested with the stdio stub, not against Claude Code or Codex |
+| Orphan worker processes reaped on the next start | implemented. A recorded pid whose command line still matches that runtime is killed before recovery. Tested with the stdio stub. On Windows a process is killed only when its command line can be read and matches |
 | Feishu or DingTalk inside TigerCat | not implemented; those channels stay in the host |
 | DeepSeek Chat Completions Router (`router.provider = "deepseek"`) | implemented; reads `DEEPSEEK_API_KEY`; not live-tested |
 
@@ -226,8 +226,8 @@ window. It is not a guaranteed drain.
 
 SIGINT and SIGTERM have no handler in this code. On POSIX, worker processes
 are spawned detached, so a signal that kills only the TigerCat process can
-leave them behind. The next start does not look at saved pids and does not
-kill them.
+leave them behind. The next start looks at saved pids. An orphan whose
+command line still matches that runtime is killed before recovery.
 
 ## Restart and recovery
 
@@ -238,27 +238,42 @@ the same config and database.
 
 - leaves an existing Router session row in place, or inserts one
 - returns in-flight Router queue rows to pending and sets `router_busy` to `0`
-- marks every non-terminal Worker `interrupted`, drops its subscriptions, and
-  records `worker.error` with `worker process was not alive after restart`
+- for each non-terminal Worker, handles the recorded pid first. A live
+  process whose command line still matches the runtime is killed. Then, if
+  that runtime advertises `loadSession` and `session/load` succeeds, the
+  original ACP session id is loaded in a new process, the Worker returns to
+  `idle`, the Thread subscription stays, and the next event goes straight to
+  that Worker. If there is no session id, the runtime does not advertise
+  `loadSession`, or `session/load` fails, the Worker is marked `lost`, its
+  subscriptions are dropped, and a `worker.lost` event is recorded. `code` is
+  `lost`, `message` is `worker session could not be restored after restart`,
+  and `reason` is `no_session`, `load_unsupported`, `load_failed`, or
+  `session_mismatch`
 
 Threads and the event log remain. The worktree directory is left on disk.
 `removeWorkspace` exists and is not called on this path.
 
+`interrupted` is still a legal state. Automatic recovery does not write it.
+`resume` accepts `lost` and `interrupted`: it opens a new ACP session on the
+existing worktree with the caller's new input. That is not `session/load`.
+
 What does not happen:
 
-- `session/load` is not called. The upstream agent advertises `loadSession: false`.
-  `runtime test` reports `degraded: ["loadSession"]`. A Worker cannot resume
-  the previous ACP session.
-- Saved pids are not reaped.
-- A Worker that was mid-turn is not resumed. Its Thread goes back through the
-  Router because the subscription was released.
+- The upstream TigerCat agent still advertises `loadSession: false`.
+  `runtime test` still reports `degraded: ["loadSession"]`, because that probe
+  only does `session/new` and does not call `session/load`.
+- A dead process is not left as `running` or `starting`. When the state is one
+  of those two, the recorded pid has to be alive.
+- A failed load does not quietly open a new ACP session. That is what
+  `resume` does.
 
 The one-shot commands `list`, `send`, `read`, `interrupt`, `wait`, `kill`,
 `subscribe`, `unsubscribe`, and `spawn` open the same database and call
 `Engine.start` themselves. Running `tigercat list` against a database that
-still has non-terminal Workers marks those Workers interrupted, even if
-another `tigercat acp` still has them. Do not point those commands at the
-database of a running process. There is no read-only status command.
+still has non-terminal Workers restores the ones `session/load` can restore
+and marks the rest `lost`, even if another `tigercat acp` still has them. Do
+not point those commands at the database of a running process. There is no
+read-only status command.
 
 ## Logging
 
@@ -305,10 +320,11 @@ in the config file that was loaded. Check `--config` and `TIGERCAT_CONFIG`.
 `max concurrency <n> reached` is `max_concurrency` in the config (default 4).
 It counts Workers in `starting` or `running`.
 
-After a crash, `tigercat list --json` will itself run recovery and the Workers
-will show `interrupted`. Start `tigercat acp` only after that, or start `acp`
-directly and let it do the same recovery. Do not expect the old ACP session
-ids to work.
+After a crash, `tigercat list --json` will itself run recovery. A Worker that
+can be loaded returns to `idle`; one that cannot is shown as `lost`. Start
+`tigercat acp` only after that, or start `acp` directly and let it do the same
+recovery. When `session/load` succeeds, the original ACP session id is still
+there. When it fails, do not expect the old id to work.
 
 If two `tigercat acp` processes were pointed at one sqlite file, stop both.
 The code does not repair a database that two writers used.
@@ -323,8 +339,10 @@ like a Worker that never reaches `worker.turn_end`.
   runs with nothing else installed is the in-process scripted brain.
 - A DeepSeek Chat Completions Router is implemented (`router.provider = "deepseek"`, key from `DEEPSEEK_API_KEY`). It has not been live-tested. The scripted brain remains the default.
 - The default worker runtime name `worker` is not a built-in.
-- `session/load` is off. A restart does not resume a Worker ACP session and
-  does not reap saved pids. SIGINT and SIGTERM have no handler.
+- A restart tries downstream `session/load`. The stdio stub covers a
+  successful load, a runtime that does not advertise `loadSession`, and a
+  failed `session/load`. This has not been run against real Claude Code or
+  Codex. SIGINT and SIGTERM still have no handler.
 - `session.pid` is written after the worker handshake returns. This pull
   request does not change that, and it does not add a wait. A Windows test
   that reads the pid too early is a process-startup race for development.

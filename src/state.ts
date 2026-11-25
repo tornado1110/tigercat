@@ -2,7 +2,7 @@ import { TigerError } from "./errors.js";
 import type { SessionState } from "./types.js";
 
 const LEGAL: Record<SessionState, readonly SessionState[]> = {
-  starting: ["running", "error", "killed", "cancelled", "interrupted"],
+  starting: ["running", "error", "killed", "cancelled", "interrupted", "lost"],
   running: [
     "idle",
     "awaiting_input",
@@ -12,15 +12,17 @@ const LEGAL: Record<SessionState, readonly SessionState[]> = {
     "killed",
     "finished",
     "interrupted",
+    "lost",
   ],
-  idle: ["running", "killed", "finished", "error", "interrupted", "cancelled"],
-  awaiting_input: ["running", "killed", "error", "cancelled", "interrupted", "idle"],
+  idle: ["running", "killed", "finished", "error", "interrupted", "cancelled", "lost"],
+  awaiting_input: ["running", "killed", "error", "cancelled", "interrupted", "idle", "lost"],
   stalled: ["killed", "error", "cancelled", "interrupted"],
   cancelled: ["killed", "finished"],
   error: ["killed"],
   killed: [],
   finished: ["killed"],
   interrupted: ["killed", "running", "starting"],
+  lost: ["killed", "starting"],
 };
 
 export function canTransition(from: SessionState, to: SessionState): boolean {
@@ -44,6 +46,7 @@ export function isTerminal(state: SessionState): boolean {
     state === "error" ||
     state === "cancelled" ||
     state === "interrupted" ||
+    state === "lost" ||
     state === "stalled"
   );
 }

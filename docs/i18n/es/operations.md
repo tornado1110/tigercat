@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 3452da8c151a5f5df97290f28906e96d7143b976 -->
+<!-- i18n-source: docs/operations.md @ 96cd4319b7c7d2ddfbad8368770a3c95a94ce5cc -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # Operar TigerCat
@@ -20,8 +20,8 @@ Nada de lo que hay aquí se ha ejecutado contra una cuenta real de DeepSeek, Cla
 | Router con script cuando `coordinator_runtime` no está definido | probado con el brain con script dentro del proceso |
 | Proceso de Router ACP nombrado por `coordinator_runtime` | implementado (`launchCoordinator`); no se ejecutó contra un modelo real |
 | Los Thread de sqlite, el registro de eventos y la cola del Router pendiente sobreviven a un proceso nuevo | implementado en `Engine.start` |
-| Las sesiones ACP del Worker sobreviven a un reinicio | no implementado; `loadSession` se anuncia como false |
-| Los procesos worker huérfanos se recogen en el siguiente arranque | no implementado |
+| Las sesiones ACP del Worker sobreviven a un reinicio | cuando el runtime de abajo anuncia `loadSession` en `initialize` y `session/load` tiene éxito, se restaura el id de sesión ACP original y la suscripción del Thread se queda. Si no, el Worker se marca `lost` y se registra un `worker.lost`. Probado con el stub stdio, no contra Claude Code ni Codex |
+| Los procesos worker huérfanos se recogen en el siguiente arranque | implementado. Un pid registrado cuya línea de comando todavía coincide con ese runtime se mata antes de la recuperación. Probado con el stub stdio. En Windows solo se mata cuando se puede leer la línea de comando y coincide |
 | Feishu o DingTalk dentro de TigerCat | no implementado; esos canales se quedan en el host |
 | Router de DeepSeek Chat Completions (`router.provider = "deepseek"`) | implementado; lee `DEEPSEEK_API_KEY`; no probado en vivo |
 
@@ -149,7 +149,7 @@ Una ruta limpia es que el cliente ACP cierre stdin. Entonces `serveUpstream` vue
 
 Esa ruta también programa `process.exit(0)` a los 500 ms, y otra vez cuando los clientes MCP de arriba se han cerrado. El desmontaje de los Worker es un mejor esfuerzo dentro de esa ventana. No es un vaciado garantizado.
 
-SIGINT y SIGTERM no tienen manejador en este código. En POSIX, los procesos worker se lanzan detached, así que una señal que mate solo el proceso TigerCat puede dejarlos atrás. El siguiente arranque no mira los pid guardados y no los mata.
+SIGINT y SIGTERM no tienen manejador en este código. En POSIX, los procesos worker se lanzan detached, así que una señal que mate solo el proceso TigerCat puede dejarlos atrás. El siguiente arranque mira los pid guardados. Un huérfano cuya línea de comando todavía coincide con ese runtime se mata antes de la recuperación.
 
 ## Reinicio y recuperación
 
@@ -159,17 +159,19 @@ Entonces `Engine.start`:
 
 - deja en su sitio una fila de sesión del Router que ya exista, o inserta una
 - devuelve a pending las filas de la cola del Router que estaban en curso y pone `router_busy` en `0`
-- marca cada Worker que no es terminal como `interrupted`, suelta sus suscripciones y registra `worker.error` con `worker process was not alive after restart`
+- para cada Worker que no es terminal, trata primero el pid registrado. Un proceso vivo cuya línea de comando todavía coincide con el runtime se mata. Después, si ese runtime anuncia `loadSession` y `session/load` tiene éxito, se carga el id de sesión ACP original en un proceso nuevo, el Worker vuelve a `idle`, la suscripción del Thread se queda y el siguiente evento va directo a ese Worker. Si no hay id de sesión, el runtime no anuncia `loadSession`, o `session/load` falla, el Worker se marca `lost`, se sueltan las suscripciones y se registra un `worker.lost`. `code` es `lost`, `message` es `worker session could not be restored after restart`, y `reason` es `no_session`, `load_unsupported`, `load_failed` o `session_mismatch`
 
 Los Thread y el registro de eventos permanecen. El directorio del worktree se queda en disco. `removeWorkspace` existe y no se llama en esta ruta.
 
+`interrupted` sigue siendo un estado legal. La recuperación automática ya no lo escribe. `resume` acepta `lost` e `interrupted`: abre una sesión ACP nueva en el worktree existente con la entrada nueva de quien llama. Eso no es `session/load`.
+
 Lo que no ocurre:
 
-- No se llama a `session/load`. El agente de arriba anuncia `loadSession: false`. `runtime test` informa `degraded: ["loadSession"]`. Un Worker no puede reanudar la sesión ACP anterior.
-- No se recogen los pid guardados.
-- Un Worker que estaba a mitad de turno no se reanuda. Su Thread vuelve a pasar por el Router porque la suscripción se liberó.
+- El agente TigerCat de arriba sigue anunciando `loadSession: false`. `runtime test` sigue informando `degraded: ["loadSession"]`, porque esa sonda solo hace `session/new` y no llama a `session/load`.
+- Un proceso muerto no se deja como `running` o `starting`. Cuando el estado es uno de esos dos, el pid registrado tiene que estar vivo.
+- Una carga fallida no abre en silencio una sesión ACP nueva. Eso es lo que hace `resume`.
 
-Los comandos de una sola vez `list`, `send`, `read`, `interrupt`, `wait`, `kill`, `subscribe`, `unsubscribe` y `spawn` abren la misma base de datos y llaman ellos mismos a `Engine.start`. Ejecutar `tigercat list` contra una base de datos que todavía tiene Workers no terminales marca esos Workers como interrupted, aunque otro `tigercat acp` todavía los tenga. No apuntes esos comandos a la base de datos de un proceso en marcha. No hay un comando de estado de solo lectura.
+Los comandos de una sola vez `list`, `send`, `read`, `interrupt`, `wait`, `kill`, `subscribe`, `unsubscribe` y `spawn` abren la misma base de datos y llaman ellos mismos a `Engine.start`. Ejecutar `tigercat list` contra una base de datos que todavía tiene Workers no terminales restaura los que `session/load` puede restaurar y marca el resto como `lost`, aunque otro `tigercat acp` todavía los tenga. No apuntes esos comandos a la base de datos de un proceso en marcha. No hay un comando de estado de solo lectura.
 
 ## Registros
 
@@ -196,7 +198,7 @@ Un JSON de `runtime test` con `ok: false` y `mode: "dry-run"` significa que fall
 
 `max concurrency <n> reached` es `max_concurrency` en la configuración (el valor predeterminado es 4). Cuenta Workers en `starting` o `running`.
 
-Después de una caída, `tigercat list --json` ejecuta él mismo la recuperación y los Workers aparecen como `interrupted`. Arranca `tigercat acp` solo después de eso, o arranca `acp` directamente y deja que haga la misma recuperación. No esperes que los id de sesión ACP antiguos funcionen.
+Después de una caída, `tigercat list --json` ejecuta él mismo la recuperación. Un Worker que se puede cargar vuelve a `idle`; uno que no se puede cargar aparece como `lost`. Arranca `tigercat acp` solo después de eso, o arranca `acp` directamente y deja que haga la misma recuperación. Cuando `session/load` tiene éxito, el id de sesión ACP original sigue ahí. Cuando falla, no esperes que el id antiguo funcione.
 
 Si dos procesos `tigercat acp` apuntaban a un mismo archivo sqlite, para los dos. El código no repara una base de datos que usaron dos escritores.
 
@@ -207,7 +209,7 @@ Las peticiones de permiso se quedan en el Worker hasta que algo las responde. Na
 - No hay un ejecutable de Router, ni pasos para instalar uno. El único Router que se ejecuta sin instalar nada más es el brain con script dentro del proceso.
 - Un Router de DeepSeek Chat Completions está implementado (`router.provider = "deepseek"`, clave de `DEEPSEEK_API_KEY`). No se ha probado en vivo. El brain con script sigue siendo el predeterminado.
 - El nombre predeterminado del runtime de worker, `worker`, no es integrado.
-- `session/load` está apagado. Un reinicio no reanuda una sesión ACP del Worker y no recoge los pid guardados. SIGINT y SIGTERM no tienen manejador.
+- Un reinicio intenta `session/load` hacia abajo. El stub stdio cubre una carga con éxito, un runtime que no anuncia `loadSession` y un `session/load` que falla. No se ha ejecutado contra Claude Code o Codex reales. SIGINT y SIGTERM siguen sin manejador.
 - `session.pid` se escribe después de que vuelve el handshake del worker. Este pull request no cambia eso, y no añade una espera. Una prueba de Windows que lee el pid demasiado pronto es una carrera de arranque del proceso, para desarrollo.
 - Un handle de `node:sqlite` por base de datos. Un segundo escritor no está coordinado.
 - El texto del prompt se guarda tal como se envió.

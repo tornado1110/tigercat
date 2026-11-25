@@ -13,7 +13,7 @@ import { newId } from "./ids.js";
 import { decidePermission, type PermissionOption } from "./permissions.js";
 import { SecretRegistry } from "./redact.js";
 import { resolveRuntime } from "./builtins.js";
-import type { LaunchContext, RuntimeFactory, RuntimeHandle } from "./runtime.js";
+import { reapMatchingProcess, type LaunchContext, type RuntimeFactory, type RuntimeHandle } from "./runtime.js";
 import { spill } from "./spill.js";
 import { acceptsSend, assertTransition, isTerminal } from "./state.js";
 import type { Store, TriggerIngestResult } from "./store.js";
@@ -205,6 +205,13 @@ interface LiveWorker {
  * subscriptions, the event log, the router queue) are in {@link Store}.
  * This object only holds live process handles and timers.
  */
+function lostReason(error: unknown): string {
+  if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "session_mismatch")) {
+    return error.code;
+  }
+  return "load_failed";
+}
+
 export class Engine {
   readonly store: Store;
   readonly clock: Clock;
@@ -324,17 +331,125 @@ export class Engine {
     const sessions = await this.store.listSessions("worker");
     for (const session of sessions) {
       if (isTerminal(session.state)) continue;
-      // No live handle survives the process. That is an abnormal exit:
-      // release every subscription so the Thread goes back through the Router.
-      // interrupt() does not do this; only kill and this path do.
-      await this.transition(session.id, "interrupted");
-      await this.releaseSubscriptions(session.id);
-      await this.emit("worker.error", session.id, {
-        message: "worker process was not alive after restart",
-        code: "interrupted",
-      });
+      await this.recoverWorker(session);
     }
     this.scheduleFlush();
+  }
+
+  /**
+   * The in-memory ACP handle is gone. Load the original session when the
+   * runtime supports it; otherwise mark the Worker lost and drop subscriptions
+   * so the next event goes through the Router. `interrupted` stays a public
+   * state for rows already stored that way. Automatic recovery writes `lost`.
+   */
+  private async recoverWorker(session: SessionRecord): Promise<void> {
+    if (this.closed) return;
+    this.reapOrphan(session);
+    if (this.closed) return;
+    if (!session.acpSessionId) {
+      await this.markLost(session, "no_session");
+      return;
+    }
+    const load = this.factory.loadSession;
+    if (!load || !session.cwd) {
+      await this.markLost(session, "load_unsupported");
+      return;
+    }
+    let runtime: RuntimeConfig;
+    try {
+      runtime = this.runtimeByName(session.runtime ?? "");
+    } catch {
+      await this.markLost(session, "load_unsupported");
+      return;
+    }
+    try {
+      const restored = await this.restoreLoadedSession(session, runtime, load);
+      if (!restored) await this.markLost(session, "load_failed");
+    } catch (error) {
+      await this.markLost(session, lostReason(error));
+    }
+  }
+
+  private reapOrphan(session: SessionRecord): void {
+    if (session.pid == null) return;
+    let runtime: RuntimeConfig;
+    try {
+      runtime = this.runtimeByName(session.runtime ?? "");
+    } catch {
+      return;
+    }
+    reapMatchingProcess(session.pid, [runtime.command, ...runtime.args]);
+  }
+
+  private async restoreLoadedSession(
+    session: SessionRecord,
+    runtime: RuntimeConfig,
+    load: NonNullable<RuntimeFactory["loadSession"]>,
+  ): Promise<boolean> {
+    if (!session.acpSessionId || !session.cwd) return false;
+    const live = this.liveOf(session.id);
+    live.workspace = {
+      cwd: session.cwd,
+      baseCwd: session.baseCwd ?? session.cwd,
+      worktree: session.worktree,
+    };
+    const handle = await load.call(this.factory, runtime, this.launchContext(session, runtime), session.acpSessionId);
+    if (this.closed || live.suppressExit) {
+      await handle.kill();
+      return true;
+    }
+    if (handle.acpSessionId !== session.acpSessionId) {
+      await handle.kill();
+      throw new TigerError("session_mismatch", `${runtime.name}: session/load did not keep ${session.acpSessionId}`);
+    }
+    const current = await this.store.getSession(session.id);
+    if (!current || isTerminal(current.state) || this.closed || live.suppressExit) {
+      await handle.kill();
+      return true;
+    }
+    live.handle = handle;
+    await this.store.updateSession(session.id, {
+      pid: handle.pid ?? null,
+      acpSessionId: session.acpSessionId,
+      updatedAt: this.clock.now(),
+    });
+    await this.settleRestored(session.id);
+    if (this.closed || live.suppressExit) {
+      await handle.kill();
+      return true;
+    }
+    await this.emit("worker.update", session.id, {
+      state: "idle",
+      recovered: true,
+      nativeSession: "loaded",
+      acpSessionId: session.acpSessionId,
+    });
+    return true;
+  }
+
+  private async settleRestored(id: string): Promise<void> {
+    const session = await this.store.getSession(id);
+    if (!session || isTerminal(session.state)) return;
+    if (session.state === "starting") await this.transition(id, "running");
+    const current = await this.store.getSession(id);
+    if (!current || isTerminal(current.state)) return;
+    if (current.state === "running" || current.state === "awaiting_input") {
+      await this.transition(id, "idle");
+    }
+  }
+
+  private async markLost(session: SessionRecord, reason: string): Promise<void> {
+    if (this.closed) return;
+    const current = await this.store.getSession(session.id);
+    if (!current || isTerminal(current.state)) return;
+    await this.transition(session.id, "lost");
+    await this.store.updateSession(session.id, { pid: null, updatedAt: this.clock.now() });
+    await this.releaseSubscriptions(session.id);
+    await this.emit("worker.lost", session.id, {
+      message: "worker session could not be restored after restart",
+      code: "lost",
+      reason,
+    });
   }
 
   /**
@@ -608,8 +723,9 @@ export class Engine {
     return { status: "started", workerId, threadId: thread.id };
   }
 
-  /** Explicitly restore an interrupted Worker on its existing worktree.
-   * The caller must provide new input; the old prompt is never replayed. */
+  /** Restore a lost or interrupted Worker on its existing worktree.
+   * The caller must provide new input; the old prompt is never replayed.
+   * This opens a new ACP session. It is not `session/load`. */
   async resume(workerId: string, input: string): Promise<SpawnResult> {
     requireString(workerId, "workerId");
     requireString(input, "input");
@@ -620,7 +736,7 @@ export class Engine {
     try {
       if (this.closed) throw new TigerError("engine_closed", "Cannot resume a Worker after Engine shutdown");
       const session = await this.requireWorker(workerId);
-      if (session.state !== "interrupted") throw new TigerError("not_resumable", `worker ${workerId} is ${session.state}`);
+      if (session.state !== "interrupted" && session.state !== "lost") throw new TigerError("not_resumable", `worker ${workerId} is ${session.state}`);
       const live = this.live.get(workerId);
       if (live?.handle) throw new TigerError("worker_running", `worker ${workerId} still has a live runtime handle`);
       if (!session.cwd || !session.baseCwd) throw new TigerError("workspace_missing", `worker ${workerId} has no recoverable workspace`);

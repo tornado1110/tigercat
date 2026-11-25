@@ -37,6 +37,8 @@ export interface LaunchContext {
   onPermission: (request: acp.RequestPermissionRequest) => Promise<acp.RequestPermissionResponse>;
   /** Process exited on its own. `kill()` does not call this. */
   onExit?: (info: { code: number | null; signal: NodeJS.Signals | null }) => void;
+  /** Call `session/load` for this ACP session instead of `session/new`. */
+  resumeAcpSessionId?: string;
 }
 
 export interface RuntimeHandle {
@@ -50,6 +52,11 @@ export interface RuntimeHandle {
 
 export interface RuntimeFactory {
   launch(runtime: RuntimeConfig, ctx: LaunchContext): Promise<RuntimeHandle>;
+  /**
+   * Restore an existing ACP session in a new process.
+   * Absent when this factory cannot call `session/load`.
+   */
+  loadSession?(runtime: RuntimeConfig, ctx: LaunchContext, acpSessionId: string): Promise<RuntimeHandle>;
 }
 
 export class FakeTimeRuntimeFactory implements RuntimeFactory {
@@ -211,6 +218,10 @@ export function buildWorkerEnvironment(
 export class ProcessRuntimeFactory implements RuntimeFactory {
   constructor(private readonly options: ProcessRuntimeOptions = {}) {}
 
+  loadSession(runtime: RuntimeConfig, ctx: LaunchContext, acpSessionId: string): Promise<RuntimeHandle> {
+    return this.launch(runtime, { ...ctx, resumeAcpSessionId: acpSessionId });
+  }
+
   async launch(runtime: RuntimeConfig, ctx: LaunchContext): Promise<RuntimeHandle> {
     const env = buildWorkerEnvironment(runtime.env, process.env, runtime.name, runtime.providerCredentialEnv);
     if (runtime.providerCredentialEnv && !env[runtime.providerCredentialEnv]) {
@@ -320,19 +331,21 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
           `${runtime.name} negotiated protocol ${String(init.protocolVersion)}, expected ${acp.PROTOCOL_VERSION}`,
         );
       }
-      const session = await withTimeout(
-        Promise.race([
-          connection.agent
-            .buildSession({
-              cwd: ctx.cwd,
-              mcpServers: ctx.mcpServers ?? [],
-            })
-            .start(),
-          launchError,
-        ]),
-        timeoutMs,
-        "session/new timed out",
-      );
+      const session = ctx.resumeAcpSessionId
+        ? await loadAcpSession(connection, ctx, runtime, timeoutMs, launchError, init.agentCapabilities?.loadSession === true)
+        : await withTimeout(
+          Promise.race([
+            connection.agent
+              .buildSession({
+                cwd: ctx.cwd,
+                mcpServers: ctx.mcpServers ?? [],
+              })
+              .start(),
+            launchError,
+          ]),
+          timeoutMs,
+          "session/new timed out",
+        );
       proc.off("error", onLaunchError);
       const steering = init._meta?.steering;
       const supportsSteering = typeof steering === "object" && steering !== null
@@ -347,6 +360,9 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
       }
       proc.off("error", onLaunchError);
       connection.close();
+      if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed")) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       const detail = stderr ? ` (${redactText(stderr.trim())})` : "";
       throw new TigerError(
@@ -354,6 +370,68 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
         `${runtime.name}: ${redactText(message)}${redactText(killMessage)}${detail}`,
       );
     }
+  }
+}
+
+interface PromptSession {
+  readonly sessionId: string;
+  readonly newSessionResponse: acp.NewSessionResponse;
+  prompt(text: string): Promise<acp.PromptResponse>;
+}
+
+class LoadedSession implements PromptSession {
+  constructor(
+    private readonly connection: acp.ClientConnection,
+    readonly sessionId: string,
+    private readonly loaded: acp.LoadSessionResponse,
+  ) {}
+
+  get newSessionResponse(): acp.NewSessionResponse {
+    return {
+      sessionId: this.sessionId,
+      modes: this.loaded.modes,
+      configOptions: this.loaded.configOptions,
+      _meta: this.loaded._meta,
+    };
+  }
+
+  prompt(text: string): Promise<acp.PromptResponse> {
+    return this.connection.agent.request(acp.methods.agent.session.prompt, {
+      sessionId: this.sessionId,
+      prompt: [{ type: "text", text }],
+    });
+  }
+}
+
+async function loadAcpSession(
+  connection: acp.ClientConnection,
+  ctx: LaunchContext,
+  runtime: RuntimeConfig,
+  timeoutMs: number,
+  launchError: Promise<never>,
+  advertised: boolean,
+): Promise<PromptSession> {
+  const sessionId = ctx.resumeAcpSessionId;
+  if (!sessionId) throw new TigerError("load_failed", `${runtime.name}: session/load requires a session id`);
+  if (!advertised) throw new TigerError("load_unsupported", `${runtime.name} does not advertise loadSession`);
+  try {
+    const loaded = await withTimeout(
+      Promise.race([
+        connection.agent.request(acp.methods.agent.session.load, {
+          sessionId,
+          cwd: ctx.cwd,
+          mcpServers: ctx.mcpServers ?? [],
+        }),
+        launchError,
+      ]),
+      timeoutMs,
+      "session/load timed out",
+    );
+    return new LoadedSession(connection, sessionId, loaded ?? {});
+  } catch (error) {
+    if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed")) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new TigerError("load_failed", `${runtime.name}: session/load failed: ${redactText(message)}`);
   }
 }
 
@@ -367,7 +445,7 @@ class ProcessHandle implements RuntimeHandle {
   constructor(
     private readonly proc: ChildProcess,
     private readonly connection: acp.ClientConnection,
-    private readonly session: acp.ActiveSession,
+    private readonly session: PromptSession,
     private readonly updates: RuntimeUpdate[],
     private readonly onExit: LaunchContext["onExit"],
     supportsSteering: boolean,
@@ -689,7 +767,7 @@ function taskKillTree(pid: number): void {
   }
 }
 
-function pidAlive(pid: number): boolean {
+export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -697,6 +775,65 @@ function pidAlive(pid: number): boolean {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
     return code === "EPERM";
   }
+}
+
+/**
+ * Kill a recorded runtime process only when its command line still matches
+ * the argv we launched. A recycled pid that belongs to something else is left
+ * alone. Returns without throwing when the process is already gone.
+ */
+export function reapMatchingProcess(pid: number, argv: readonly string[]): void {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid || argv.length === 0) return;
+  if (!pidAlive(pid)) return;
+  if (!processCommandMatches(pid, argv)) return;
+  if (process.platform === "win32") {
+    taskKillTree(pid);
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+}
+
+function processCommandMatches(pid: number, argv: readonly string[]): boolean {
+  const markers = argv.map((part) => path.basename(part)).filter((part) => part.length > 0);
+  if (markers.length === 0) return false;
+  let commandLine = "";
+  try {
+    commandLine = process.platform === "win32" ? windowsCommandLine(pid) : posixCommandLine(pid);
+  } catch {
+    return false;
+  }
+  const haystack = commandLine.toLowerCase();
+  return markers.every((marker) => markerInCommand(haystack, marker));
+}
+
+function markerInCommand(haystack: string, marker: string): boolean {
+  const folded = marker.toLowerCase();
+  const bare = folded.replace(/\.exe$/i, "");
+  return haystack.includes(folded) || (bare.length > 0 && haystack.includes(bare));
+}
+
+function posixCommandLine(pid: number): string {
+  return execFileSync("ps", ["-p", String(pid), "-o", "args="], {
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+}
+
+function windowsCommandLine(pid: number): string {
+  const powershell = path.join(windowsSystemRoot(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  return execFileSync(
+    powershell,
+    ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
+    { encoding: "utf8", timeout: 10_000, windowsHide: true },
+  );
 }
 
 function delay(ms: number): Promise<void> {

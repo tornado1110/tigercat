@@ -127,7 +127,7 @@ describe("Worker launch and prompt races", () => {
     expect(handle.prompts).toHaveLength(1);
   });
 
-  it("resumes an interrupted Worker with its existing worktree and ID", async () => {
+  it("resumes a lost Worker with its existing worktree and ID", async () => {
     const first = await fixture();
     await until(() => first.handle.prompts.length === 1);
     const cwd = (await first.store.getSession(first.workerId))!.cwd;
@@ -136,7 +136,7 @@ describe("Worker launch and prompt races", () => {
     const replacement = new Engine({ store: first.store, clock: first.clock, config: first.engine.config, factory: replacementFactory, workspaceRoot: path.dirname(cwd!) });
     fixtures.push({ engine: replacement, store: first.store, root: path.dirname(cwd!) });
     await replacement.start();
-    expect((await first.store.getSession(first.workerId))?.state).toBe("interrupted");
+    expect((await first.store.getSession(first.workerId))?.state).toBe("lost");
     const resumed = await replacement.resume(first.workerId, "new recovery input");
     expect(resumed.workerId).toBe(first.workerId);
     expect((await first.store.getSession(first.workerId))?.cwd).toBe(cwd);
@@ -449,7 +449,7 @@ describe("Worker launch and prompt races", () => {
     expect((await engine.events()).some((event) => event.type === "worker.turn_end")).toBe(false);
   });
 
-  it("clears a kill request so a later resume can leave interrupted", async () => {
+  it("clears a kill request so a later resume can leave lost", async () => {
     const first = await fixture();
     await until(() => first.handle.prompts.length === 1);
     const cwd = (await first.store.getSession(first.workerId))!.cwd;
@@ -464,12 +464,12 @@ describe("Worker launch and prompt races", () => {
     });
     fixtures.push({ engine: replacement, store: first.store, root: path.dirname(cwd!) });
     await replacement.start();
-    expect((await first.store.getSession(first.workerId))?.state).toBe("interrupted");
+    expect((await first.store.getSession(first.workerId))?.state).toBe("lost");
     vi.spyOn(first.store, "updateSession").mockImplementationOnce(() => {
       throw new Error("killed write failed");
     });
     await expect(replacement.kill(first.workerId)).rejects.toThrow("killed write failed");
-    expect((await first.store.getSession(first.workerId))?.state).toBe("interrupted");
+    expect((await first.store.getSession(first.workerId))?.state).toBe("lost");
     vi.mocked(first.store.updateSession).mockRestore();
 
     const resumed = await replacement.resume(first.workerId, "continue after the abandoned kill");
