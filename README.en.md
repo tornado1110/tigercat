@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ ca166493f762bc62bec8da9b25ce900f6b885fba -->
+<!-- i18n-source: README.md @ 324a024452bf15e3c15d4d2c64564c8f9399c138 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # TigerCat
@@ -16,6 +16,8 @@ In plugin mode, Codex controls the native shell, editing, and file-writing tools
 `server/cli.js plugin` in that directory is the MCP entry point, and its working directory is the plugin root. When Codex, Claude Code, or another host starts it, the process refuses to start, for the reason above. The `.codex-plugin` manifest only makes Codex discover the install. The Worker/ACP core does not depend on a particular host.
 
 The coordination contract includes `runtimes`, `spawn`, `resume`, `list`, `send`, `read`, `interrupt`, `wait`, `kill`, `subscribe`, and `unsubscribe`. A configured Lark binding also names `lark_status`, `lark_discover`, and `lark_execute` in that contract. This is not the tool surface currently exposed. For repository inspection, coding, tests, investigation, and ongoing tasks, the main session should dispatch a Worker without waiting for the user to say "use TigerCat". Explanations, clarification, and chat stay in the main session. External side effects still need user confirmation. `spawn` must include the absolute `cwd` of the user's project. Each `wait` is at most 30 seconds. The plugin starts in its install directory, which does not identify the project. A Worker's coding ability still comes from the selected ACP runtime.
+
+Closing the MCP connection cleans up Workers. Each plugin process has its own temporary state unless `TIGERCAT_PLUGIN_DB` is set to keep history, and only one plugin process may use that database. After a restart the old Workers are marked `lost` and a `worker.lost` event is recorded. Their tasks are not replayed. The built-in `claude-code` and `codex` profiles do not advertise `loadSession`, so the subscription returns to the Router. `interrupted` is reserved for an explicit interrupt, not for this restart. A `.plugin-lock` left by an abnormal exit should be removed only after the old process is confirmed gone. This version does not promise to wake a Codex session, to keep running after disconnect, or to deliver a durable result.
 
 This repository is a week-1 feasibility skeleton. It is not a completed M0. Real Claude Code / Codex sessions, a Feishu round-trip, a real model as the Router, and proof that a vendor harness has no native shell or edit tools are all still unverified. CI drives the `claude-code` and `codex` profiles through the stdio stub. The manual commands for a real binary are below. TigerCat's own MCP catalog omitting those tools does not say anything about the tools a downstream agent ships itself. Cross-channel and shared-PR ingress are M1, not this skeleton.
 
@@ -134,11 +136,11 @@ Triggers are admitted by the ordered rule engine, then routed:
 - Anything else is batched into the Router's next turn. `candidate` is only judged there; `respond` with no subscriber is spawned.
 - `spawn` returns `{ "status": "started" }` immediately. Results are pushed when the Router is idle, and queued into one batch when it is busy. `wait` is optional.
 - A stop phrase from the rules cancels the current turn (`session/cancel`) and **keeps** subscriptions, so "stop, do X instead" still reaches that Worker.
-- `interrupt` cancels the current turn and keeps subscriptions. `kill`, a crash, or a restart that finds no live Worker process drops every subscription and keeps the worktree. The Thread goes back through the Router.
+- `interrupt` cancels the current turn and keeps subscriptions. It does not mark the Worker `lost`. `interrupted` is reserved for that explicit interrupt, not for a restart. `kill` or a crash drops every subscription and keeps the worktree. On restart, the built-in `claude-code` and `codex` profiles do not advertise `loadSession`, so the Worker is marked `lost`, a `worker.lost` event is recorded, the subscription returns to the Router, and the worktree is kept. The original ACP session id and the subscription stay only when that runtime advertises `loadSession` and `session/load` succeeds. That path was checked with the stdio stub only, not on real Claude Code or Codex. After `lost`, the Thread goes back through the Router.
 
 `worker.turn_end.awaitingInput` is a TigerCat annotation, not an ACP field. The agent's `stopReason` is stored as ACP sent it (usually `end_turn`). TigerCat sets `awaitingInput` only when that reason is `end_turn` and the Worker's text looks like a question or a request for clarification.
 
-State lives in `node:sqlite` behind a `Store` interface. The process keeps sockets and timers only. A restart reloads Threads and any undelivered Router queue. Worker processes do not survive it, so their subscriptions are released.
+State lives in `node:sqlite` behind a `Store` interface. The process keeps sockets and timers only. A restart reloads Threads and any undelivered Router queue. The built-in `claude-code` and `codex` profiles do not advertise `loadSession`, so a restart marks the Worker `lost`, records `worker.lost`, releases the subscription, and sends the Thread back through the Router. When a runtime advertises `loadSession` and `session/load` succeeds, the original ACP session id and the subscription stay. That was checked with the stdio stub only, not on real Claude Code or Codex.
 
 ## Tests
 
