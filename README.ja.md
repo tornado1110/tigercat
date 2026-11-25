@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 95cc3403c6edeeab67a919b3261780094399072a -->
+<!-- i18n-source: README.md @ 7374327db1e0a2c73288be88a464af6bd27ab3ac -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat
@@ -17,7 +17,7 @@ TigerCat は [Agent Client Protocol](https://agentclientprotocol.com) の上に�
 
 調整ツールの契約には `runtimes`、`spawn`、`resume`、`list`、`send`、`read`、`interrupt`、`wait`、`kill`、`subscribe`、`unsubscribe` が含まれます。Lark のバインディングを設定すると、契約には `lark_status`、`lark_discover`、`lark_execute` も入ります。これは現在公開されているツール面ではありません。リポジトリの調査、実装、テスト、継続的な作業では、メインセッションがユーザーの「TigerCat を使って」を待たずに Worker へ渡します。説明、確認、雑談はメインセッションが直接扱います。外部への副作用にはユーザーの確認が必要です。`spawn` にはユーザーのプロジェクトの絶対 `cwd` が必要です。`wait` は 1 回あたり最大 30 秒です。プラグインの起動ディレクトリはインストール先であり、そこからプロジェクトのパスは分かりません。Worker の実際のコーディング能力は、選んだ ACP runtime から来ます。
 
-MCP 接続を閉じると Worker は片付けられます。既定ではプラグインプロセスごとに一時的な状態を持ちます。`TIGERCAT_PLUGIN_DB` を設定すると履歴を残せますが、そのデータベースを使えるプラグインプロセスは一つだけです。再起動のあと、古い Worker は `lost` になり、`worker.lost` が記録されます。タスクは自動では再実行されません。組み込みの `claude-code` と `codex` は `loadSession` を宣言しないので、購読は Router に戻ります。`interrupted` は明示的な interrupt のためのものであり、この再起動には使いません。異常終了で残った `.plugin-lock` は、古いプロセスが終了したことを確認してから削除します。この版は、Codex セッションの自動起動、切断後の継続、永続的な結果配送を約束しません。
+MCP 接続を閉じると Worker は片付けられます。既定ではプラグインプロセスごとに一時的な状態を持ちます。`TIGERCAT_PLUGIN_DB` を設定すると履歴を残せますが、そのデータベースを使えるプラグインプロセスは一つだけです。再起動のあと、古い Worker は `lost` になり、`worker.lost` が記録されます。タスクは自動では再実行されません。組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しません。固定の adapter `@agentclientprotocol/claude-agent-acp@0.108.0` と `@agentclientprotocol/codex-acp@2.7.0` は `loadSession: true` を宣言しますが、再起動はこの二つの名前に `session/load` を呼びません。終端でない組み込み Worker は `lost`（`worker.lost`、`reason` は `builtin_no_restore`）になり、購読は Router に戻ります。タスクは自動では再実行されません。`interrupted` は明示的な interrupt のためのものであり、この再起動には使いません。異常終了で残った `.plugin-lock` は、古いプロセスが終了したことを確認してから削除します。この版は、Codex セッションの自動起動、切断後の継続、永続的な結果配送を約束しません。
 
 このリポジトリは第 1 週の実現可能性スケルトンです。完成した M0 ではありません。実際の Claude Code / Codex セッション、Feishu の往復、実モデルを Router にすること、そしてベンダーの harness にネイティブの shell や編集ツールが無いという証明は、いずれも未検証です。CI は stdio stub を通して `claude-code` と `codex` のプロファイルを駆動します。実バイナリ向けの手動コマンドは下にあります。TigerCat 自身の MCP カタログがそれらのツールを載せないことは、下流の agent が自分で持っているツールについては何も言いません。クロスチャンネルの入口と共有 PR の入口は M1 であり、このスケルトンの範囲ではありません。
 
@@ -126,11 +126,11 @@ Trigger は順序付きのルールエンジンで入場したあと、次のよ
 - それ以外は Router の次のターンにまとめられます。`candidate` の判定はそこでだけ行います。購読者のいない `respond` は spawn されます。
 - `spawn` は直ちに `{ "status": "started" }` を返します。結果は Router が空いているときに押し出され、忙しいときは一つのバッチに並びます。`wait` は任意です。
 - ルールにある停止の句は、現在のターンを取り消し（`session/cancel`）、購読は**残します**。そのため「止めて、代わりに X をする」は、その Worker に届いたままです。
-- `interrupt` は現在のターンを取り消し、購読は残します。Worker を `lost` にはしません。`interrupted` はこの明示的な interrupt のためのもので、再起動には使いません。`kill` またはクラッシュは購読をすべて外し、worktree は残します。再起動時、組み込みの `claude-code` と `codex` は `loadSession` を宣言しないので、Worker は `lost` になり、`worker.lost` が記録され、購読は Router に戻り、worktree は残ります。ターンがすでに終わっていて、runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけ、元の ACP session id と購読が残ります。`running` または `starting` は読み込めても `lost` になり（`worker.lost`、`reason` は `in_flight_turn`）、購読は Router に戻ります。これは stdio stub だけで確認し、本物の Claude Code や Codex では確認していません。`lost` のあと、その Thread は再び Router を通ります。
+- `interrupt` は現在のターンを取り消し、購読は残します。Worker を `lost` にはしません。`interrupted` はこの明示的な interrupt のためのもので、再起動には使いません。`kill` またはクラッシュは購読をすべて外し、worktree は残します。組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しません。再起動は `session/load` を呼ばず、終端でない Worker は `lost`（`reason` は `builtin_no_restore`）になり、購読は Router に戻り、worktree は残ります。固定の adapter は `loadSession: true` を宣言しますが、ここではまだ使いません。組み込みでない runtime は、ターンがすでに終わって `session/load` が成功したときだけ、元の ACP session id と購読を残します。`running` または `starting` は読み込めても `lost` になり（`worker.lost`、`reason` は `in_flight_turn`）、購読は Router に戻ります。これは stdio stub だけで確認し、本物の Claude Code や Codex では確認していません。`lost` のあと、その Thread は再び Router を通ります。
 
 `worker.turn_end.awaitingInput` は TigerCat が付ける注釈であり、ACP のフィールドではありません。agent の `stopReason` は ACP が送ったまま保存します（通常は `end_turn`）。この理由が `end_turn` であり、かつ Worker のテキストが質問か、確認を求めているように見えるときだけ、TigerCat は `awaitingInput` を立てます。
 
-状態は `Store` インターフェースの背後にある `node:sqlite` に置きます。プロセスが保持するのは socket と timer だけです。再起動すると Thread と、まだ届いていない Router のキューを読み直します。組み込みの `claude-code` と `codex` は `loadSession` を宣言しないので、再起動は Worker を `lost` にし、`worker.lost` を記録し、購読を外し、Thread は Router に戻ります。ターンがすでに終わっていて `loadSession` を宣言し `session/load` が成功したときは、元の ACP session id と購読が残ります。まだ進行中のターンは `lost` になり、`idle` にはしません。これは stdio stub だけで確認したもので、本物の Claude Code や Codex 上の結果ではありません。
+状態は `Store` インターフェースの背後にある `node:sqlite` に置きます。プロセスが保持するのは socket と timer だけです。再起動すると Thread と、まだ届いていない Router のキューを読み直します。組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しません。再起動は `lost`（`reason` は `builtin_no_restore`）にし、購読を外し、Thread は Router に戻ります。固定の adapter は `loadSession: true` を宣言しますが、再起動はこの名前に `session/load` を呼びません。組み込みでない runtime は、ターンがすでに終わって `session/load` が成功したとき、元の ACP session id と購読を残します。まだ進行中のターンは `lost` になり、`idle` にはしません。これは stdio stub だけで確認したもので、本物の Claude Code や Codex 上の結果ではありません。
 
 ## テスト
 
