@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 96cd4319b7c7d2ddfbad8368770a3c95a94ce5cc -->
+<!-- i18n-source: docs/operations.md @ 43016f20a1a6551c9cc56c01a932d9b34db92d14 -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # Operar TigerCat
@@ -20,7 +20,7 @@ Nada de lo que hay aquí se ha ejecutado contra una cuenta real de DeepSeek, Cla
 | Router con script cuando `coordinator_runtime` no está definido | probado con el brain con script dentro del proceso |
 | Proceso de Router ACP nombrado por `coordinator_runtime` | implementado (`launchCoordinator`); no se ejecutó contra un modelo real |
 | Los Thread de sqlite, el registro de eventos y la cola del Router pendiente sobreviven a un proceso nuevo | implementado en `Engine.start` |
-| Las sesiones ACP del Worker sobreviven a un reinicio | cuando el runtime de abajo anuncia `loadSession` en `initialize` y `session/load` tiene éxito, se restaura el id de sesión ACP original y la suscripción del Thread se queda. Si no, el Worker se marca `lost` y se registra un `worker.lost`. Probado con el stub stdio, no contra Claude Code ni Codex |
+| Las sesiones ACP del Worker sobreviven a un reinicio | los perfiles integrados `claude-code` y `codex` no anuncian `loadSession`. Un reinicio sobre ellos marca el Worker como `lost`, registra un `worker.lost` y devuelve la suscripción al Router. El id de sesión ACP original y la suscripción se quedan solo cuando ese runtime anuncia `loadSession` y `session/load` tiene éxito. Esa ruta de éxito se probó solo con el stub stdio, no contra Claude Code o Codex reales |
 | Los procesos worker huérfanos se recogen en el siguiente arranque | implementado. Un pid registrado cuya línea de comando todavía coincide con ese runtime se mata antes de la recuperación. Probado con el stub stdio. En Windows solo se mata cuando se puede leer la línea de comando y coincide |
 | Feishu o DingTalk dentro de TigerCat | no implementado; esos canales se quedan en el host |
 | Router de DeepSeek Chat Completions (`router.provider = "deepseek"`) | implementado; lee `DEEPSEEK_API_KEY`; no probado en vivo |
@@ -163,7 +163,9 @@ Entonces `Engine.start`:
 
 Los Thread y el registro de eventos permanecen. El directorio del worktree se queda en disco. `removeWorkspace` existe y no se llama en esta ruta.
 
-`interrupted` sigue siendo un estado legal. La recuperación automática ya no lo escribe. `resume` acepta `lost` e `interrupted`: abre una sesión ACP nueva en el worktree existente con la entrada nueva de quien llama. Eso no es `session/load`.
+Los perfiles integrados `claude-code` y `codex` no anuncian `loadSession`. Sobre ellos, el reinicio toma el camino `lost` y la suscripción vuelve al Router. Conservar la suscripción, como se dijo arriba, ocurre solo cuando el propio runtime anuncia `loadSession` y `session/load` tiene éxito. Esa ruta solo se ha comprobado con el stub stdio.
+
+`interrupted` queda reservado para un interrupt explícito. El reinicio no escribe ese estado. `interrupt` cancela el turno actual y conserva las suscripciones; no marca el Worker como `lost`. `resume` acepta un Worker que ya está en `lost` o `interrupted`: abre una sesión ACP nueva en el worktree existente con la entrada nueva de quien llama. Eso no es `session/load`.
 
 Lo que no ocurre:
 
@@ -209,7 +211,7 @@ Las peticiones de permiso se quedan en el Worker hasta que algo las responde. Na
 - No hay un ejecutable de Router, ni pasos para instalar uno. El único Router que se ejecuta sin instalar nada más es el brain con script dentro del proceso.
 - Un Router de DeepSeek Chat Completions está implementado (`router.provider = "deepseek"`, clave de `DEEPSEEK_API_KEY`). No se ha probado en vivo. El brain con script sigue siendo el predeterminado.
 - El nombre predeterminado del runtime de worker, `worker`, no es integrado.
-- Un reinicio intenta `session/load` hacia abajo. El stub stdio cubre una carga con éxito, un runtime que no anuncia `loadSession` y un `session/load` que falla. No se ha ejecutado contra Claude Code o Codex reales. SIGINT y SIGTERM siguen sin manejador.
+- Un reinicio intenta `session/load` hacia abajo. Los perfiles integrados `claude-code` y `codex` no anuncian `loadSession`, así que quedan en `lost` y la suscripción vuelve al Router. El stub stdio cubre una carga con éxito, un runtime que no anuncia `loadSession` y un `session/load` que falla. No se ha ejecutado contra Claude Code o Codex reales. SIGINT y SIGTERM siguen sin manejador.
 - `session.pid` se escribe después de que vuelve el handshake del worker. Este pull request no cambia eso, y no añade una espera. Una prueba de Windows que lee el pid demasiado pronto es una carrera de arranque del proceso, para desarrollo.
 - Un handle de `node:sqlite` por base de datos. Un segundo escritor no está coordinado.
 - El texto del prompt se guarda tal como se envió.

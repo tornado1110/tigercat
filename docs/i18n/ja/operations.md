@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 96cd4319b7c7d2ddfbad8368770a3c95a94ce5cc -->
+<!-- i18n-source: docs/operations.md @ 43016f20a1a6551c9cc56c01a932d9b34db92d14 -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat の操作
@@ -20,7 +20,7 @@
 | `coordinator_runtime` が未設定のときのスクリプト化された Router | プロセス内のスクリプト化された brain でテスト済み |
 | `coordinator_runtime` が名指しする ACP Router プロセス | 実装済み（`launchCoordinator`）。実モデルに対しては未実行 |
 | sqlite の Thread、イベントログ、未配送の Router キューが新しいプロセスを越えて残る | `Engine.start` に実装済み |
-| Worker の ACP セッションが再起動を越えて残る | 下流の runtime が `initialize` で `loadSession` を宣言し、`session/load` が成功したとき、元の ACP session id を戻し、Thread の購読は残す。そうでなければ Worker は `lost` になり、`worker.lost` を記録する。stdio stub でテストした。Claude Code や Codex には当てていない |
+| Worker の ACP セッションが再起動を越えて残る | 組み込みの `claude-code` と `codex` は `loadSession` を宣言しない。それらの上での再起動は Worker を `lost` にし、`worker.lost` を記録し、購読は Router に戻る。runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけ、元の ACP session id と購読が残る。この成功経路は stdio stub だけでテストし、本物の Claude Code や Codex には当てていない |
 | 次の起動で孤児の worker プロセスを回収する | 実装済み。記録された pid のコマンド行がまだその runtime と一致するなら、回復の前に殺す。stdio stub でテストした。Windows ではコマンド行が読めて一致するときだけ殺す |
 | TigerCat の中の Feishu または DingTalk | 未実装。それらのチャンネルはホスト側に残る |
 | DeepSeek Chat Completions Router（`router.provider = "deepseek"`） | 実装済み。`DEEPSEEK_API_KEY` を読む。実機テストはしていない |
@@ -163,7 +163,9 @@ stop サブコマンドはありません。
 
 Thread とイベントログは残ります。worktree ディレクトリはディスクに残ります。`removeWorkspace` は存在しますが、この経路では呼びません。
 
-`interrupted` は今も正当な状態です。自動回復はそれを書きません。`resume` は `lost` と `interrupted` を受けます。呼び出し側が渡した新しい入力で、元の worktree に新しい ACP session を開きます。これは `session/load` ではありません。
+組み込みの `claude-code` と `codex` は `loadSession` を宣言しません。それらの上では再起動は `lost` になり、購読は Router に戻ります。上で書いた購読を残すのは、runtime 自身が `loadSession` を宣言し `session/load` が成功したときだけで、今は stdio stub でしか確認していません。
+
+`interrupted` は明示的な interrupt のためのものです。再起動はこの状態を書きません。`interrupt` は現在のターンを取り消し、購読は残します。Worker を `lost` にはしません。`resume` はすでに `lost` または `interrupted` の Worker を受けます。呼び出し側が渡した新しい入力で、元の worktree に新しい ACP session を開きます。これは `session/load` ではありません。
 
 起きないこと:
 
@@ -209,7 +211,7 @@ prompt のテキストは、送られたまま保存されます。`trigger.inge
 - Router の実行ファイルは無く、そのインストール手順もありません。他に何もインストールしないときに動く Router は、プロセス内のスクリプト化された brain だけです。
 - DeepSeek Chat Completions Router は実装されています（`router.provider = "deepseek"`、鍵は `DEEPSEEK_API_KEY`）。実機テストはしていません。既定はスクリプト化された brain のままです。
 - 既定の worker runtime 名 `worker` は組み込みではありません。
-- 再起動は下流の `session/load` を試します。stdio stub は、読み込み成功、`loadSession` を宣言しない runtime、`session/load` の失敗を覆います。本物の Claude Code や Codex には当てていません。SIGINT と SIGTERM には今もハンドラがありません。
+- 再起動は下流の `session/load` を試します。組み込みの `claude-code` と `codex` は `loadSession` を宣言しないので `lost` になり、購読は Router に戻ります。stdio stub は、読み込み成功、`loadSession` を宣言しない runtime、`session/load` の失敗を覆います。本物の Claude Code や Codex には当てていません。SIGINT と SIGTERM には今もハンドラがありません。
 - `session.pid` は worker のハンドシェイクが返ったあとに書かれます。この pull request はそこを変えず、待ちも足しません。pid を早く読みすぎる Windows のテストは、開発中のプロセス起動レースです。
 - データベースごとに `node:sqlite` の handle は一つです。二人目の書き手は調整されません。
 - prompt のテキストは送られたまま保存されます。

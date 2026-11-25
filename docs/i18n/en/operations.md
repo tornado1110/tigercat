@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 96cd4319b7c7d2ddfbad8368770a3c95a94ce5cc -->
+<!-- i18n-source: docs/operations.md @ 43016f20a1a6551c9cc56c01a932d9b34db92d14 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Operating TigerCat
@@ -24,7 +24,7 @@ are marked tested.
 | Scripted Router when `coordinator_runtime` is unset | tested with the in-process scripted brain |
 | ACP Router process named by `coordinator_runtime` | implemented (`launchCoordinator`); not run against a real model |
 | sqlite Threads, event log, and pending Router queue survive a new process | implemented in `Engine.start` |
-| Worker ACP sessions survive a restart | when the downstream runtime advertises `loadSession` during `initialize` and `session/load` succeeds, the original ACP session id is restored and the Thread subscription stays. Otherwise the Worker is marked `lost` and a `worker.lost` event is recorded. Tested with the stdio stub, not against Claude Code or Codex |
+| Worker ACP sessions survive a restart | the built-in `claude-code` and `codex` profiles do not advertise `loadSession`. A restart on them marks the Worker `lost`, records `worker.lost`, and returns the subscription to the Router. The original ACP session id and the subscription stay only when that runtime itself advertises `loadSession` and `session/load` succeeds. That success path was tested with the stdio stub only, not against real Claude Code or Codex |
 | Orphan worker processes reaped on the next start | implemented. A recorded pid whose command line still matches that runtime is killed before recovery. Tested with the stdio stub. On Windows a process is killed only when its command line can be read and matches |
 | Feishu or DingTalk inside TigerCat | not implemented; those channels stay in the host |
 | DeepSeek Chat Completions Router (`router.provider = "deepseek"`) | implemented; reads `DEEPSEEK_API_KEY`; not live-tested |
@@ -253,9 +253,17 @@ the same config and database.
 Threads and the event log remain. The worktree directory is left on disk.
 `removeWorkspace` exists and is not called on this path.
 
-`interrupted` is still a legal state. Automatic recovery does not write it.
-`resume` accepts `lost` and `interrupted`: it opens a new ACP session on the
-existing worktree with the caller's new input. That is not `session/load`.
+The built-in `claude-code` and `codex` profiles do not advertise `loadSession`.
+On them, restart takes the `lost` path and the subscription returns to the
+Router. Keeping the subscription, as described above, happens only when the
+runtime itself advertises `loadSession` and `session/load` succeeds. That path
+has been checked with the stdio stub only.
+
+`interrupted` is reserved for an explicit interrupt. Restart does not write
+it. `interrupt` cancels the current turn and keeps subscriptions; it does not
+mark the Worker `lost`. `resume` accepts a Worker that is already `lost` or
+`interrupted`: it opens a new ACP session on the existing worktree with the
+caller's new input. That is not `session/load`.
 
 What does not happen:
 
@@ -339,7 +347,9 @@ like a Worker that never reaches `worker.turn_end`.
   runs with nothing else installed is the in-process scripted brain.
 - A DeepSeek Chat Completions Router is implemented (`router.provider = "deepseek"`, key from `DEEPSEEK_API_KEY`). It has not been live-tested. The scripted brain remains the default.
 - The default worker runtime name `worker` is not a built-in.
-- A restart tries downstream `session/load`. The stdio stub covers a
+- A restart tries downstream `session/load`. The built-in `claude-code` and
+  `codex` profiles do not advertise `loadSession`, so they are marked `lost`
+  and the subscription returns to the Router. The stdio stub covers a
   successful load, a runtime that does not advertise `loadSession`, and a
   failed `session/load`. This has not been run against real Claude Code or
   Codex. SIGINT and SIGTERM still have no handler.
