@@ -374,8 +374,9 @@ describe("real stdio stub-agent", () => {
     await second.start();
     const recovered = await second.store.getSession(spawned.workerId);
     expect(recovered?.state).toBe("lost");
-    const lost = (await second.events()).find((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
-    expect(lost?.payload).toMatchObject({
+    const lost = (await second.events()).filter((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
+    expect(lost).toHaveLength(1);
+    expect(lost[0]?.payload).toMatchObject({
       code: "lost",
       reason: "load_unsupported",
       message: "worker session could not be restored after restart",

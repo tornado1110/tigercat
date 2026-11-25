@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { builtinByName, listRuntimes } from "../../src/builtins.js";
 import { SystemClock } from "../../src/clock.js";
 import { defaultConfig } from "../../src/config.js";
 import { Engine } from "../../src/engine.js";
-import { pidAlive, ProcessRuntimeFactory } from "../../src/runtime.js";
+import { pidAlive, ProcessRuntimeFactory, type RuntimeHandle } from "../../src/runtime.js";
 import { SqliteStore } from "../../src/store.js";
 import { startStdioEngine, stubRuntime, waitForEvent } from "../harness/stdio-engine.js";
 import type { RuntimeConfig } from "../../src/types.js";
@@ -149,59 +150,91 @@ describe("restart recovery over stdio", () => {
     }
   });
 
-  it.each(["claude-code", "codex"] as const)(
-    "%s is lost on restart even when the process advertises session/load",
-    async (name) => {
-      const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-builtin-"));
-      roots.push(scratch);
-      const logFile = path.join(scratch, "session-log");
-      const env = {
-        TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
-        TIGERCAT_STUB_SESSION_LOG: logFile,
-      };
-      const runtime = { ...stubRuntime("session-load", env), name };
-      const first = await startNamedEngine(name, runtime, scratch);
-      roots.push(first.root);
-      const db = path.join(first.root, "state.sqlite");
-      const spawned = await first.engine.spawn({
-        runtime: name,
-        prompt: "finish before restart",
-        threads: ["feishu:eng:cli"],
-      });
-      await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
-      expect((await first.engine.store.getSession(spawned.workerId))?.state).toBe("idle");
-      expect(await first.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(1);
-      await first.engine.close();
-      await first.store.close();
-
-      const second = await startNamedEngine(name, runtime, first.root, db);
-      try {
-        const recovered = await second.engine.store.getSession(spawned.workerId);
-        expect(recovered?.state).toBe("lost");
-        const lost = (await second.engine.events()).find((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
-        expect(lost?.payload).toMatchObject({
-          code: "lost",
-          reason: "builtin_no_restore",
-          message: "built-in runtime does not restore sessions yet",
-        });
-        expect(await second.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(0);
-        expect(readFileSync(logFile, "utf8")).not.toMatch(/^load /m);
-        const follow = await second.engine.ingest({
-          source: "feishu",
-          thread: "feishu:eng:cli",
-          author: "keith",
-          text: "continue after restart",
-          kind: "im.message",
-          timestamp: Date.now(),
-        });
-        expect(follow.deliveredTo).not.toContain(spawned.workerId);
-        expect(follow.router).toBe(true);
-      } finally {
-        await second.engine.close();
-        await second.store.close();
-      }
+  it.each([
+    ["claude-code", "idle", "session-load"],
+    ["codex", "idle", "session-load"],
+    ["claude-code", "awaiting_input", "session-load"],
+    ["codex", "awaiting_input", "session-load"],
+    ["claude-code", "running", "session-load-hang"],
+    ["codex", "running", "session-load-hang"],
+  ] as const)(
+    "%s in %s is lost once on restart and a second restart adds no events",
+    async (name, state, scenario) => {
+      await expectBuiltinNameLost(name, state, scenario);
     },
   );
+
+  it("a configured override named claude-code is not loaded and goes lost", async () => {
+    await expectBuiltinNameLost("claude-code", "idle", "session-load", true);
+  });
+
+  it.each([
+    ["load_failed", "session-load-fail"],
+    ["load_unsupported", "no-session-load"],
+  ] as const)("non-built-in restart with %s releases the subscription", async (reason, scenario) => {
+    await expectNonBuiltinLost(scenario, reason);
+  });
+
+  it("no_session when restart finds no recorded ACP session id", async () => {
+    const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-no-session-"));
+    roots.push(scratch);
+    const env = {
+      TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
+      TIGERCAT_STUB_SESSION_LOG: path.join(scratch, "session-log"),
+    };
+    const first = await startStdioEngine("session-load", env);
+    roots.push(first.root);
+    const db = path.join(first.root, "state.sqlite");
+    const spawned = await first.engine.spawn({
+      runtime: "session-load",
+      prompt: "finish before restart",
+      threads: ["feishu:eng:cli"],
+    });
+    await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+    expect((await first.engine.store.getSession(spawned.workerId))?.acpSessionId).toMatch(/^stub-load-/);
+    await first.engine.close();
+    await first.store.close();
+    clearAcpSessionId(db, spawned.workerId);
+    const second = openRecoveredEngine(first.root, db, "session-load", env);
+    try {
+      await second.engine.start();
+      await assertLostOnce(second.engine, spawned.workerId, "no_session");
+    } finally {
+      await second.engine.close();
+      await second.store.close();
+    }
+  });
+
+  it("session_mismatch when session/load reports a different session id", async () => {
+    const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-mismatch-"));
+    roots.push(scratch);
+    const env = {
+      TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
+      TIGERCAT_STUB_SESSION_LOG: path.join(scratch, "session-log"),
+    };
+    const first = await startStdioEngine("session-load", env);
+    roots.push(first.root);
+    const db = path.join(first.root, "state.sqlite");
+    const spawned = await first.engine.spawn({
+      runtime: "session-load",
+      prompt: "finish before restart",
+      threads: ["feishu:eng:cli"],
+    });
+    await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+    const saved = (await first.engine.store.getSession(spawned.workerId))?.acpSessionId;
+    expect(saved).toMatch(/^stub-load-/);
+    await first.engine.close();
+    await first.store.close();
+    const second = openRecoveredEngine(first.root, db, "session-load", env, new MismatchFactory("stub-other-session"));
+    try {
+      await second.engine.start();
+      await assertLostOnce(second.engine, spawned.workerId, "session_mismatch");
+      expect(readFileSync(env.TIGERCAT_STUB_SESSION_LOG, "utf8")).toContain(`load ${saved}`);
+    } finally {
+      await second.engine.close();
+      await second.store.close();
+    }
+  });
 
   it("session/load resumes the same ACP session and keeps direct routing", async () => {
     const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-load-"));
@@ -270,6 +303,162 @@ describe("restart recovery over stdio", () => {
     }
   });
 });
+
+class MismatchFactory extends ProcessRuntimeFactory {
+  constructor(private readonly reportedSessionId: string) {
+    super({ handshakeTimeoutMs: 8_000 });
+  }
+
+  override async loadSession(runtime: RuntimeConfig, ctx: Parameters<ProcessRuntimeFactory["loadSession"]>[1], acpSessionId: string): Promise<RuntimeHandle> {
+    const handle = await super.loadSession(runtime, ctx, acpSessionId);
+    const reportedSessionId = this.reportedSessionId;
+    return new Proxy(handle, {
+      get(target, prop, receiver) {
+        if (prop === "acpSessionId") return reportedSessionId;
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+}
+
+async function expectBuiltinNameLost(name: "claude-code" | "codex", state: "idle" | "awaiting_input" | "running", scenario: string, expectOverride = false): Promise<void> {
+  const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-builtin-"));
+  roots.push(scratch);
+  const logFile = path.join(scratch, "session-log");
+  const env = {
+    TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
+    TIGERCAT_STUB_SESSION_LOG: logFile,
+  };
+  const runtime = { ...stubRuntime(scenario, env), name };
+  expect(builtinByName(name)?.name).toBe(name);
+  expect(runtime.command).toBe(process.execPath);
+  const first = await startNamedEngine(name, runtime, scratch);
+  roots.push(first.root);
+  const db = path.join(first.root, "state.sqlite");
+  const prompt = state === "awaiting_input" ? "Which file?" : state === "running" ? "stay in the turn" : "finish before restart";
+  const spawned = await first.engine.spawn({
+    runtime: name,
+    prompt,
+    threads: ["feishu:eng:cli"],
+  });
+  if (state === "running") {
+    await waitForRunning(first.engine, spawned.workerId);
+  } else {
+    const ended = await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+    if (state === "awaiting_input") expect(ended.payload.awaitingInput).toBe(true);
+  }
+  expect((await first.engine.store.getSession(spawned.workerId))?.state).toBe(state);
+  expect(await first.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(1);
+  await first.engine.close();
+  await first.store.close();
+
+  const second = await startNamedEngine(name, runtime, first.root, db);
+  let eventIds: string[] = [];
+  try {
+    if (expectOverride) {
+      const listed = listRuntimes(second.engine.config).find((entry) => entry.name === name);
+      expect(listed?.overridden).toBe(true);
+      expect(listed?.command).toBe(process.execPath);
+    }
+    await second.engine.settle();
+    await assertLostOnce(second.engine, spawned.workerId, "builtin_no_restore", "built-in runtime does not restore sessions yet", false);
+    expect(readFileSync(logFile, "utf8")).not.toMatch(/^load /m);
+    eventIds = (await second.engine.events()).map((event) => event.id);
+  } finally {
+    await second.engine.close();
+    await second.store.close();
+  }
+
+  const third = await startNamedEngine(name, runtime, first.root, db);
+  try {
+    await third.engine.settle();
+    expect((await third.engine.events()).map((event) => event.id)).toEqual(eventIds);
+    expect((await third.engine.store.getSession(spawned.workerId))?.state).toBe("lost");
+    const follow = await third.engine.ingest({
+      source: "feishu",
+      thread: "feishu:eng:cli",
+      author: "keith",
+      text: "continue after restart",
+      kind: "im.message",
+      timestamp: Date.now(),
+    });
+    expect(follow.deliveredTo).not.toContain(spawned.workerId);
+    expect(follow.router).toBe(true);
+    const lost = (await third.engine.events()).filter((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
+    expect(lost).toHaveLength(1);
+    expect(readFileSync(logFile, "utf8")).not.toMatch(/^load /m);
+  } finally {
+    await third.engine.close();
+    await third.store.close();
+  }
+}
+
+async function expectNonBuiltinLost(scenario: string, reason: string): Promise<void> {
+  const first = await startStdioEngine(scenario);
+  roots.push(first.root);
+  const db = path.join(first.root, "state.sqlite");
+  const spawned = await first.engine.spawn({
+    runtime: scenario,
+    prompt: "finish before restart",
+    threads: ["feishu:eng:cli"],
+  });
+  await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+  expect((await first.engine.store.getSession(spawned.workerId))?.state).toBe("idle");
+  await first.engine.close();
+  await first.store.close();
+  const second = openRecoveredEngine(first.root, db, scenario, {});
+  try {
+    await second.engine.start();
+    await assertLostOnce(second.engine, spawned.workerId, reason);
+  } finally {
+    await second.engine.close();
+    await second.store.close();
+  }
+}
+
+function openRecoveredEngine(root: string, db: string, scenario: string, env: Record<string, string>, factory?: ProcessRuntimeFactory) {
+  const store = SqliteStore.open(db);
+  const config = defaultConfig();
+  config.defaultWorkerRuntime = scenario;
+  config.runtimes = [stubRuntime(scenario, env)];
+  const engine = new Engine({
+    store,
+    clock: new SystemClock(),
+    config,
+    factory: factory ?? new ProcessRuntimeFactory({ handshakeTimeoutMs: 8_000 }),
+    workspaceRoot: root,
+  });
+  return { engine, store };
+}
+
+async function assertLostOnce(engine: Engine, workerId: string, reason: string, message = "worker session could not be restored after restart", ingest = true): Promise<void> {
+  expect((await engine.store.getSession(workerId))?.state).toBe("lost");
+  const lost = (await engine.events()).filter((event) => event.type === "worker.lost" && event.workerId === workerId);
+  expect(lost).toHaveLength(1);
+  expect(lost[0]?.payload).toMatchObject({ code: "lost", reason, message });
+  expect(await engine.store.subscriptionsForWorker(workerId)).toHaveLength(0);
+  if (!ingest) return;
+  const follow = await engine.ingest({
+    source: "feishu",
+    thread: "feishu:eng:cli",
+    author: "keith",
+    text: "continue after restart",
+    kind: "im.message",
+    timestamp: Date.now(),
+  });
+  expect(follow.deliveredTo).not.toContain(workerId);
+  expect(follow.router).toBe(true);
+}
+
+function clearAcpSessionId(file: string, workerId: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    db.prepare("UPDATE sessions SET acp_session_id = NULL WHERE id = ?").run(workerId);
+  } finally {
+    db.close();
+  }
+}
 
 async function startNamedEngine(name: string, runtime: RuntimeConfig, workspaceRoot: string, db?: string) {
   const root = db ? workspaceRoot : mkdtempSync(path.join(tmpdir(), "tigercat-stdio-"));
