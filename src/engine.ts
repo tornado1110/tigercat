@@ -206,7 +206,7 @@ interface LiveWorker {
  * This object only holds live process handles and timers.
  */
 function lostReason(error: unknown): string {
-    if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "session_mismatch" || error.code === "in_flight_turn" || error.code === "builtin_no_restore")) {
+  if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "session_mismatch" || error.code === "in_flight_turn" || error.code === "builtin_no_restore")) {
     return error.code;
   }
   return "load_failed";
