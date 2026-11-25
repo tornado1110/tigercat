@@ -69,8 +69,10 @@ describe("restart recovery over stdio", () => {
       expect(recovered?.pid).toBeNull();
       expect(listedByOs(running.pid)).toBe(false);
       expect(pidAlive(running.pid)).toBe(false);
-      const lost = (await second.events()).find((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
-      expect(lost?.payload).toMatchObject({
+      const lost = (await second.events()).filter((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
+      expect(lost).toHaveLength(1);
+      expect(lost[0]?.payload.reason).toBe("in_flight_turn");
+      expect(lost[0]?.payload).toMatchObject({
         code: "lost",
         reason: "in_flight_turn",
         message: "in-flight turn was lost on restart",
@@ -124,8 +126,10 @@ describe("restart recovery over stdio", () => {
       await second.start();
       const recovered = await second.store.getSession(spawned.workerId);
       expect(recovered?.state).toBe("lost");
-      const lost = (await second.events()).find((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
-      expect(lost?.payload).toMatchObject({
+      const lost = (await second.events()).filter((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
+      expect(lost).toHaveLength(1);
+      expect(lost[0]?.payload.reason).toBe("in_flight_turn");
+      expect(lost[0]?.payload).toMatchObject({
         code: "lost",
         reason: "in_flight_turn",
         message: "in-flight turn was lost on restart",
@@ -433,9 +437,11 @@ function openRecoveredEngine(root: string, db: string, scenario: string, env: Re
 }
 
 async function assertLostOnce(engine: Engine, workerId: string, reason: string, message = "worker session could not be restored after restart", ingest = true): Promise<void> {
-  expect((await engine.store.getSession(workerId))?.state).toBe("lost");
+  const stored = await engine.store.getSession(workerId);
+  expect(stored?.state).toBe("lost");
   const lost = (await engine.events()).filter((event) => event.type === "worker.lost" && event.workerId === workerId);
   expect(lost).toHaveLength(1);
+  expect(lost[0]?.payload.reason).toBe(reason);
   expect(lost[0]?.payload).toMatchObject({ code: "lost", reason, message });
   expect(await engine.store.subscriptionsForWorker(workerId)).toHaveLength(0);
   if (!ingest) return;
