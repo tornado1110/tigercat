@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ bab639d97a785fce55517ce1c2f396e0b80957da -->
+<!-- i18n-source: docs/operations.md @ 7b3fb578867f024dd2e198d491c1efc26e496957 -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat の操作
@@ -20,7 +20,7 @@
 | `coordinator_runtime` が未設定のときのスクリプト化された Router | プロセス内のスクリプト化された brain でテスト済み |
 | `coordinator_runtime` が名指しする ACP Router プロセス | 実装済み（`launchCoordinator`）。実モデルに対しては未実行 |
 | sqlite の Thread、イベントログ、未配送の Router キューが新しいプロセスを越えて残る | `Engine.start` に実装済み |
-| Worker の ACP セッションが再起動を越えて残る | 組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しない。固定の adapter `@agentclientprotocol/claude-agent-acp@0.108.0` と `@agentclientprotocol/codex-acp@2.7.0` は `loadSession: true` を宣言するが、再起動はこの二つの名前に `session/load` を呼ばない。終端でない組み込み Worker は `lost` になり、`reason` は `builtin_no_restore`、購読は Router に戻る。組み込みでない runtime は、ターンが終わって `session/load` が成功したとき購読を残す。`running` または `starting` は `in_flight_turn`。stdio stub だけでテストし、本物の Claude Code や Codex には当てていない |
+| Worker の ACP セッションが再起動を越えて残る | 組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しない。固定の adapter `@agentclientprotocol/claude-agent-acp@0.108.0` と `@agentclientprotocol/codex-acp@2.7.0` は `loadSession: true` を宣言するが、再起動はこの二つの名前に `session/load` を呼ばない。終端でない組み込み Worker は `lost` になり、`reason` は `builtin_no_restore`、購読は Router に戻る。判定は runtime の名前で行うので、組み込みを同名で上書きした設定の `claude-code` または `codex` も回復せず `lost`（`reason` は `builtin_no_restore`）になり、名前か adapter かで判定するかは後の実 adapter の `session/load` に回す。組み込みでない runtime は、ターンが終わって `session/load` が成功したとき購読を残す。`running` または `starting` は `in_flight_turn`。stdio stub だけでテストし、本物の Claude Code や Codex には当てていない |
 | 次の起動で孤児の worker プロセスを回収する | 実装済み。記録された pid のコマンド行がまだその runtime と一致するなら、回復の前に殺す。stdio stub でテストした。Windows ではコマンド行が読めて一致するときだけ殺す |
 | TigerCat の中の Feishu または DingTalk | 未実装。それらのチャンネルはホスト側に残る |
 | DeepSeek Chat Completions Router（`router.provider = "deepseek"`） | 実装済み。`DEEPSEEK_API_KEY` を読む。実機テストはしていない |
@@ -163,7 +163,7 @@ stop サブコマンドはありません。
 
 Thread とイベントログは残ります。worktree ディレクトリはディスクに残ります。`removeWorkspace` は存在しますが、この経路では呼びません。
 
-組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しません。固定の adapter は `loadSession: true` を宣言しますが、再起動はこの二つの名前に `session/load` を呼びません。終端でない組み込み Worker は `lost` になり、`reason` は `builtin_no_restore`、購読は Router に戻ります。上で書いた購読を残すのは、組み込みでない runtime で、ターンがすでに終わっていて `session/load` が成功したときだけです。今は stdio stub でしか確認していません。実 adapter の `session/load` は後の作業です。
+組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しません。固定の adapter は `loadSession: true` を宣言しますが、再起動はこの二つの名前に `session/load` を呼びません。終端でない組み込み Worker は `lost` になり、`reason` は `builtin_no_restore`、購読は Router に戻ります。判定は runtime の名前で行うので、組み込みを同名で上書きした設定の `claude-code` または `codex` も回復せず `lost`（`reason` は `builtin_no_restore`）になり、名前か adapter かで判定するかは後の実 adapter の `session/load` に回す。上で書いた購読を残すのは、組み込みでない runtime で、ターンがすでに終わっていて `session/load` が成功したときだけです。今は stdio stub でしか確認していません。実 adapter の `session/load` は後の作業です。
 
 `interrupted` は明示的な interrupt のためのものです。再起動はこの状態を書きません。`interrupt` は現在のターンを取り消し、購読は残します。Worker を `lost` にはしません。`resume` はすでに `lost` または `interrupted` の Worker を受けます。呼び出し側が渡した新しい入力で、元の worktree に新しい ACP session を開きます。これは `session/load` ではありません。
 
@@ -211,7 +211,7 @@ prompt のテキストは、送られたまま保存されます。`trigger.inge
 - Router の実行ファイルは無く、そのインストール手順もありません。他に何もインストールしないときに動く Router は、プロセス内のスクリプト化された brain だけです。
 - DeepSeek Chat Completions Router は実装されています（`router.provider = "deepseek"`、鍵は `DEEPSEEK_API_KEY`）。実機テストはしていません。既定はスクリプト化された brain のままです。
 - 既定の worker runtime 名 `worker` は組み込みではありません。
-- 組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しません。再起動は `session/load` を呼ばず、`lost`（`reason` は `builtin_no_restore`）にします。固定の adapter は `loadSession: true` を宣言しますが、ここではまだ使いません。組み込みでない runtime は `session/load` を試します。stdio stub は、読み込み成功、`loadSession` を宣言しない runtime、`session/load` の失敗を覆います。本物の Claude Code や Codex には当てていません。SIGINT と SIGTERM には今もハンドラがありません。
+- 組み込み runtime の `claude-code` と `codex` は、まだセッションを回復しません。再起動は `session/load` を呼ばず、`lost`（`reason` は `builtin_no_restore`）にします。判定は runtime の名前で行うので、組み込みを同名で上書きした設定の `claude-code` または `codex` も回復せず `lost`（`reason` は `builtin_no_restore`）になり、名前か adapter かで判定するかは後の実 adapter の `session/load` に回す。固定の adapter は `loadSession: true` を宣言しますが、ここではまだ使いません。組み込みでない runtime は `session/load` を試します。stdio stub は、読み込み成功、`loadSession` を宣言しない runtime、`session/load` の失敗を覆います。本物の Claude Code や Codex には当てていません。SIGINT と SIGTERM には今もハンドラがありません。
 - `session.pid` は worker のハンドシェイクが返ったあとに書かれます。この pull request はそこを変えず、待ちも足しません。pid を早く読みすぎる Windows のテストは、開発中のプロセス起動レースです。
 - データベースごとに `node:sqlite` の handle は一つです。二人目の書き手は調整されません。
 - prompt のテキストは送られたまま保存されます。

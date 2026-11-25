@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ bab639d97a785fce55517ce1c2f396e0b80957da -->
+<!-- i18n-source: docs/operations.md @ 7b3fb578867f024dd2e198d491c1efc26e496957 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Operating TigerCat
@@ -24,7 +24,7 @@ are marked tested.
 | Scripted Router when `coordinator_runtime` is unset | tested with the in-process scripted brain |
 | ACP Router process named by `coordinator_runtime` | implemented (`launchCoordinator`); not run against a real model |
 | sqlite Threads, event log, and pending Router queue survive a new process | implemented in `Engine.start` |
-| Worker ACP sessions survive a restart | built-in `claude-code` and `codex` runtimes do not restore sessions yet. The pinned adapters `@agentclientprotocol/claude-agent-acp@0.108.0` and `@agentclientprotocol/codex-acp@2.7.0` advertise `loadSession: true`, but restart does not call `session/load` for those names. Every non-terminal built-in Worker is `lost` with reason `builtin_no_restore` and the subscription returns to the Router. A non-built-in runtime keeps the subscription when the turn had finished and `session/load` succeeds; `running` or `starting` is `in_flight_turn`. Tested with the stdio stub only, not against real Claude Code or Codex |
+| Worker ACP sessions survive a restart | built-in `claude-code` and `codex` runtimes do not restore sessions yet. The pinned adapters `@agentclientprotocol/claude-agent-acp@0.108.0` and `@agentclientprotocol/codex-acp@2.7.0` advertise `loadSession: true`, but restart does not call `session/load` for those names. Every non-terminal built-in Worker is `lost` with reason `builtin_no_restore` and the subscription returns to the Router. The check is by runtime name, so a configured runtime named `claude-code` or `codex` that overrides the built-in also skips restore and goes `lost` with `builtin_no_restore`; deciding by name or by adapter is deferred to the later real-adapter `session/load` issue. A non-built-in runtime keeps the subscription when the turn had finished and `session/load` succeeds; `running` or `starting` is `in_flight_turn`. Tested with the stdio stub only, not against real Claude Code or Codex |
 | Orphan worker processes reaped on the next start | implemented. A recorded pid whose command line still matches that runtime is killed before recovery. Tested with the stdio stub. On Windows a process is killed only when its command line can be read and matches |
 | Feishu or DingTalk inside TigerCat | not implemented; those channels stay in the host |
 | DeepSeek Chat Completions Router (`router.provider = "deepseek"`) | implemented; reads `DEEPSEEK_API_KEY`; not live-tested |
@@ -261,6 +261,7 @@ Built-in `claude-code` and `codex` runtimes do not restore sessions yet. The
 pinned adapters advertise `loadSession: true`, but restart does not call
 `session/load` for those names. Every non-terminal built-in Worker is `lost`
 with reason `builtin_no_restore`, and the subscription returns to the Router.
+The check is by runtime name, so a configured runtime named `claude-code` or `codex` that overrides the built-in also skips restore and goes `lost` with `builtin_no_restore`; deciding by name or by adapter is deferred to the later real-adapter `session/load` issue.
 Keeping the subscription, as described above, happens only for a non-built-in
 runtime whose turn had already finished and whose `session/load` succeeds.
 That path has been checked with the stdio stub only. Real-adapter `session/load`
@@ -358,7 +359,7 @@ like a Worker that never reaches `worker.turn_end`.
 - The default worker runtime name `worker` is not a built-in.
 - Built-in `claude-code` and `codex` runtimes do not restore sessions yet.
   Restart does not call `session/load` for them and marks them `lost` with
-  reason `builtin_no_restore`. The pinned adapters advertise `loadSession:
+  reason `builtin_no_restore`. The check is by runtime name, so a configured runtime named `claude-code` or `codex` that overrides the built-in also skips restore and goes `lost` with `builtin_no_restore`; deciding by name or by adapter is deferred to the later real-adapter `session/load` issue. The pinned adapters advertise `loadSession:
   true`, and that is not used yet. A non-built-in runtime does try
   `session/load`. The stdio stub covers a successful load, a runtime that does
   not advertise `loadSession`, and a failed `session/load`. This has not been
