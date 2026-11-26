@@ -1,6 +1,6 @@
 {
   "name": "tigercat",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Task and Worker orchestration for coding agents, available as a standalone ACP router or a Codex plugin.",
   "type": "module",
   "license": "MIT",
