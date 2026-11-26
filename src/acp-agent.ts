@@ -53,7 +53,7 @@ class AcpDeliveryManager {
       },
     }, { clock: engine.clock });
     this.unsubscribe = engine.addHook((event) => {
-      if (event.type !== "worker.turn_end" && event.type !== "worker.error") return;
+      if (!upstreamForwardsEvent(event)) return;
       void this.routeEvent(event).catch(() => undefined);
     });
   }
@@ -64,7 +64,7 @@ class AcpDeliveryManager {
     // process that died after a prompt was accepted but before its result.
     for (const binding of await this.engine.store.listDeliveryBindings()) this.remember(binding);
     for (const event of await this.engine.events()) {
-      if (event.type === "worker.turn_end" || event.type === "worker.error") await this.routeEvent(event, false);
+      if (upstreamForwardsEvent(event)) await this.routeEvent(event, false);
     }
     // Pending sends have their destination snapshot in SQLite, so reconnect
     // recovery can retry proven-not-sent work without consulting new env.
@@ -101,7 +101,7 @@ class AcpDeliveryManager {
     await this.bind(workerIds, target, baseline, intentId);
     const ids = new Set(workerIds);
     for (const event of events) {
-      if (!ids.has(event.workerId) || (event.type !== "worker.turn_end" && event.type !== "worker.error")) continue;
+      if (!ids.has(event.workerId) || !upstreamForwardsEvent(event)) continue;
       if (event.seq <= (baseline.get(event.workerId) ?? 0)) continue;
       await this.routeEvent(event, false);
     }
@@ -172,6 +172,11 @@ function captureCcTarget(env: NodeJS.ProcessEnv = process.env): DurableDeliveryT
   // different cc-connect binary from a changed PATH.
   target.TIGERCAT_CC_CONNECT_BIN = env.TIGERCAT_CC_CONNECT_BIN?.trim() || "cc-connect";
   return target;
+}
+
+/** Upstream ACP delivery forwards these terminal events only, not `worker.update`. */
+export function upstreamForwardsEvent(event: { type: string }): boolean {
+  return event.type === "worker.turn_end" || event.type === "worker.error";
 }
 
 /** Stable optional provider identity carried by the ACP host. */

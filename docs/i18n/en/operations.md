@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 7b3fb578867f024dd2e198d491c1efc26e496957 -->
+<!-- i18n-source: docs/operations.md @ 6e533b72167c00b3f382125fc5ce236415bd1246 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Operating TigerCat
@@ -24,7 +24,7 @@ are marked tested.
 | Scripted Router when `coordinator_runtime` is unset | tested with the in-process scripted brain |
 | ACP Router process named by `coordinator_runtime` | implemented (`launchCoordinator`); not run against a real model |
 | sqlite Threads, event log, and pending Router queue survive a new process | implemented in `Engine.start` |
-| Worker ACP sessions survive a restart | built-in `claude-code` and `codex` runtimes do not restore sessions yet. The pinned adapters `@agentclientprotocol/claude-agent-acp@0.108.0` and `@agentclientprotocol/codex-acp@2.7.0` advertise `loadSession: true`, but restart does not call `session/load` for those names. Every non-terminal built-in Worker is `lost` with reason `builtin_no_restore` and the subscription returns to the Router. The check is by runtime name, so a configured runtime named `claude-code` or `codex` that overrides the built-in also skips restore and goes `lost` with `builtin_no_restore`; deciding by name or by adapter is deferred to the later real-adapter `session/load` issue. A non-built-in runtime keeps the subscription when the turn had finished and `session/load` succeeds; `running` or `starting` is `in_flight_turn`. Tested with the stdio stub only, not against real Claude Code or Codex |
+| Worker ACP sessions survive a restart | Decided from `initialize` `agentInfo`, not from the runtime name. The allowlist is only `@agentclientprotocol/claude-agent-acp` `0.108.0` and `@agentclientprotocol/codex-acp` `2.7.0`, and only when `loadSession` is true. Those `agentInfo.name` strings come from the installed pinned adapters. The same name at another version is `lost` (reason `builtin_no_restore`). When `loadSession` is not true, the reason is `load_unsupported`. Any other `agentInfo.name` keeps the subscription when `loadSession` was advertised and `session/load` succeeds. A runtime named `claude-code` is judged by the adapter it actually runs. `session/update` replay while `session/load` is in flight is not stored as a new `worker.update` and is not forwarded. `running` or `starting` is `in_flight_turn` and does not call `session/load`. codex-acp 2.7.0's load response has no `sessionId`, so `session_mismatch` does not fire for it. Automated tests use a stdio stub. This does not mean M0 is passed |
 | Orphan worker processes reaped on the next start | implemented. A recorded pid whose command line still matches that runtime is killed before recovery. Tested with the stdio stub. On Windows a process is killed only when its command line can be read and matches |
 | Feishu or DingTalk inside TigerCat | not implemented; those channels stay in the host |
 | DeepSeek Chat Completions Router (`router.provider = "deepseek"`) | implemented; reads `DEEPSEEK_API_KEY`; not live-tested |
@@ -245,27 +245,47 @@ the same config and database.
   `message` `in-flight turn was lost on restart`, the subscription is
   released, and the next event goes to the Router. A successful `session/load`
   does not move that Worker to `idle`. When the turn had already finished
-  (`idle` or `awaiting_input`) and the runtime advertises `loadSession` and
-  `session/load` succeeds, the original ACP session id is loaded in a new
+  (`idle` or `awaiting_input`) and the identity rule below allows
+  `session/load` and it succeeds, the original ACP session id is loaded in a new
   process, the state stays as it was, the Thread subscription stays, and the
-  next event goes straight to that Worker. No session id, no `loadSession`
-  advertisement, or a failed `session/load` also marks the Worker `lost` and
-  drops the subscription. `code` is `lost`. The other `reason` values are
+  next event goes straight to that Worker. `session/update` replay while that request
+  is in flight is not stored as a new `worker.update` and is not forwarded.
+  No session id, no `loadSession` advertisement, a built-in adapter identity
+  that is not an allowlisted version, or a failed `session/load` also marks
+  the Worker `lost` and drops the subscription. `code` is `lost`. The
+  `builtin_no_restore` message is `built-in runtime does not restore sessions yet`.
+  The `in_flight_turn` message is above. The other `reason` values are
   `no_session`, `load_unsupported`, `load_failed`, or `session_mismatch`, and
   that `message` is `worker session could not be restored after restart`
 
 Threads and the event log remain. The worktree directory is left on disk.
 `removeWorkspace` exists and is not called on this path.
 
-Built-in `claude-code` and `codex` runtimes do not restore sessions yet. The
-pinned adapters advertise `loadSession: true`, but restart does not call
-`session/load` for those names. Every non-terminal built-in Worker is `lost`
+Restore does not look at the runtime name. It looks at `agentInfo.name`,
+`agentInfo.version`, and `agentCapabilities.loadSession` in the `initialize`
+response. `session/load` is allowed only for the identities the installed
+pinned adapters report: `@agentclientprotocol/claude-agent-acp` version
+`0.108.0`, and `@agentclientprotocol/codex-acp` version `2.7.0`, and only when
+`loadSession` is true. When `agentInfo.name` is one of those two names but the
+version is not on the list, `session/load` is not sent, the Worker is `lost`
 with reason `builtin_no_restore`, and the subscription returns to the Router.
-The check is by runtime name, so a configured runtime named `claude-code` or `codex` that overrides the built-in also skips restore and goes `lost` with `builtin_no_restore`; deciding by name or by adapter is deferred to the later real-adapter `session/load` issue.
-Keeping the subscription, as described above, happens only for a non-built-in
-runtime whose turn had already finished and whose `session/load` succeeds.
-That path has been checked with the stdio stub only. Real-adapter `session/load`
-is later work.
+When `loadSession` is not true, the reason is `load_unsupported`, whether or
+not the name is on the list. A missing `agentInfo`, or an `agentInfo.name`
+that is neither of those names, is a user runtime: load is attempted when
+`loadSession` is advertised. A config named `claude-code` that points at an
+allowlisted adapter therefore restores; one that points elsewhere is judged
+by that process's own `initialize` identity. `session/update` notifications
+received from the moment the `session/load` request is sent until its response
+are not stored as new `worker.update` events and are not forwarded. A
+successful restore still records one `worker.update` with `recovered` true
+and `nativeSession` `loaded`. `running` or `starting` stays `in_flight_turn`
+above and is not loaded just because the identity is allowlisted. Restart
+does not write `interrupted`. codex-acp 2.7.0's `session/load` response has
+no `sessionId` field. The handle keeps the id that was requested, so
+`session_mismatch` does not fire on that path. That check is unchanged.
+Automated tests use a stdio stub that reports these identities. This
+repository's tests do not launch real Claude Code or Codex. This does not
+mean M0 is passed.
 
 `interrupted` is reserved for an explicit interrupt. Restart does not write
 it. `interrupt` cancels the current turn and keeps subscriptions; it does not
@@ -357,13 +377,21 @@ like a Worker that never reaches `worker.turn_end`.
   runs with nothing else installed is the in-process scripted brain.
 - A DeepSeek Chat Completions Router is implemented (`router.provider = "deepseek"`, key from `DEEPSEEK_API_KEY`). It has not been live-tested. The scripted brain remains the default.
 - The default worker runtime name `worker` is not a built-in.
-- Built-in `claude-code` and `codex` runtimes do not restore sessions yet.
-  Restart does not call `session/load` for them and marks them `lost` with
-  reason `builtin_no_restore`. The check is by runtime name, so a configured runtime named `claude-code` or `codex` that overrides the built-in also skips restore and goes `lost` with `builtin_no_restore`; deciding by name or by adapter is deferred to the later real-adapter `session/load` issue. The pinned adapters advertise `loadSession:
-  true`, and that is not used yet. A non-built-in runtime does try
-  `session/load`. The stdio stub covers a successful load, a runtime that does
-  not advertise `loadSession`, and a failed `session/load`. This has not been
-  run against real Claude Code or Codex. SIGINT and SIGTERM still have no
+- Restart decides `session/load` from `initialize` `agentInfo`, not from the
+  runtime name. The allowlist is only `@agentclientprotocol/claude-agent-acp`
+  `0.108.0` and `@agentclientprotocol/codex-acp` `2.7.0`, and only when
+  `loadSession` is true. Another version of the same name is
+  `builtin_no_restore` and does not send `session/load`. When `loadSession`
+  is not true, the reason is `load_unsupported`. Any other identity attempts
+  load when `loadSession` is advertised. A runtime named `claude-code` is
+  judged by the adapter it actually runs. History replayed while `session/load`
+  is in flight is not stored as a new `worker.update` and is not forwarded.
+  `running` or `starting` stays `in_flight_turn`. codex-acp 2.7.0's load
+  response has no `sessionId`, so `session_mismatch` does not fire for it.
+  The stdio stub covers an allowlisted restore, a wrong version, a runtime
+  that does not advertise `loadSession`, a failed `session/load`, and replay
+  that is not stored. This repository's tests do not launch real Claude Code
+  or Codex. This does not mean M0 is passed. SIGINT and SIGTERM still have no
   handler.
 - `session.pid` is written after the worker handshake returns. This pull
   request does not change that, and it does not add a wait. A Windows test

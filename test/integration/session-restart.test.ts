@@ -4,14 +4,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { builtinByName, listRuntimes } from "../../src/builtins.js";
+import { upstreamForwardsEvent } from "../../src/acp-agent.js";
+import { builtinByName, CLAUDE_AGENT_ACP_VERSION, CLAUDE_AGENT_INFO_NAME, CODEX_ACP_VERSION, CODEX_AGENT_INFO_NAME, listRuntimes } from "../../src/builtins.js";
 import { SystemClock } from "../../src/clock.js";
 import { defaultConfig } from "../../src/config.js";
 import { Engine } from "../../src/engine.js";
+import { ImChannel } from "../../src/im-channel.js";
+import { workerResultText } from "../../src/upstream-delivery.js";
 import { pidAlive, ProcessRuntimeFactory, type RuntimeHandle } from "../../src/runtime.js";
 import { SqliteStore } from "../../src/store.js";
 import { startStdioEngine, stubRuntime, waitForEvent } from "../harness/stdio-engine.js";
-import type { RuntimeConfig } from "../../src/types.js";
+import type { RuntimeConfig, TigerEvent } from "../../src/types.js";
 
 /**
  * POSIX hand check (the test below is the CI evidence):
@@ -155,21 +158,199 @@ describe("restart recovery over stdio", () => {
   });
 
   it.each([
-    ["claude-code", "idle", "session-load"],
-    ["codex", "idle", "session-load"],
-    ["claude-code", "awaiting_input", "session-load"],
-    ["codex", "awaiting_input", "session-load"],
-    ["claude-code", "running", "session-load-hang"],
-    ["codex", "running", "session-load-hang"],
+    ["claude-code", CLAUDE_AGENT_INFO_NAME, CLAUDE_AGENT_ACP_VERSION],
+    ["codex", CODEX_AGENT_INFO_NAME, CODEX_ACP_VERSION],
   ] as const)(
-    "%s in %s is lost once on restart and a second restart adds no events",
-    async (name, state, scenario) => {
-      await expectBuiltinNameLost(name, state, scenario);
+    "%s in running is lost with in_flight_turn even when the adapter identity is allowlisted",
+    async (name, agentName, agentVersion) => {
+      await expectRestartLost(name, "running", "session-load-hang", {
+        reason: "in_flight_turn",
+        message: "in-flight turn was lost on restart",
+        agentName,
+        agentVersion,
+      });
     },
   );
 
-  it("a configured override named claude-code is not loaded and goes lost", async () => {
-    await expectBuiltinNameLost("claude-code", "idle", "session-load", true);
+  it.each([
+    ["idle", CLAUDE_AGENT_INFO_NAME, "0.107.0"],
+    ["awaiting_input", CODEX_AGENT_INFO_NAME, "2.6.0"],
+  ] as const)(
+    "built-in identity at a different version in %s is lost with builtin_no_restore and is not loaded",
+    async (state, agentName, agentVersion) => {
+      await expectRestartLost("claude-code", state, "session-load", {
+        reason: "builtin_no_restore",
+        message: "built-in runtime does not restore sessions yet",
+        agentName,
+        agentVersion,
+        expectOverride: true,
+      });
+    },
+  );
+
+  it.each([
+    [CLAUDE_AGENT_INFO_NAME, CLAUDE_AGENT_ACP_VERSION],
+    [CODEX_AGENT_INFO_NAME, CODEX_ACP_VERSION],
+  ] as const)("allowlisted identity %s %s restores the idle session", async (agentName, agentVersion) => {
+    await expectIdentityRestored({ runtimeName: "restore-me", agentName, agentVersion });
+  });
+
+  it("a runtime named claude-code restores when its adapter reports an allowlisted identity", async () => {
+    await expectIdentityRestored({
+      runtimeName: "claude-code",
+      agentName: CLAUDE_AGENT_INFO_NAME,
+      agentVersion: CLAUDE_AGENT_ACP_VERSION,
+      expectOverride: true,
+    });
+  });
+
+  it("a runtime named claude-code restores when its adapter reports a non-built-in identity", async () => {
+    await expectIdentityRestored({
+      runtimeName: "claude-code",
+      agentName: "custom-acp",
+      agentVersion: "1.0.0",
+      expectOverride: true,
+    });
+  });
+
+  it("allowlisted identity with loadSession false is lost with load_unsupported", async () => {
+    await expectCapabilityLost(CLAUDE_AGENT_INFO_NAME, CLAUDE_AGENT_ACP_VERSION);
+  });
+
+  it("session/load replay adds no rows and no channel deliveries across two restarts", async () => {
+    const replay = 8;
+    const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-replay-"));
+    roots.push(scratch);
+    const logFile = path.join(scratch, "session-log");
+    const env = {
+      TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
+      TIGERCAT_STUB_SESSION_LOG: logFile,
+      TIGERCAT_STUB_REPLAY: String(replay),
+      TIGERCAT_STUB_AGENT_NAME: CLAUDE_AGENT_INFO_NAME,
+      TIGERCAT_STUB_AGENT_VERSION: CLAUDE_AGENT_ACP_VERSION,
+    };
+    const runtime = { ...stubRuntime("session-load", env), name: "claude-code" };
+    const feishuSent: string[] = [];
+    const upstreamSent: string[] = [];
+    const attachChannels = (engine: Engine) => {
+      // Feishu delivers through ImChannel. The upstream hook uses the same
+      // predicate as AcpDeliveryManager. worker.update is not one of those events.
+      const channel = new ImChannel(engine, "feishu", "claude-code", {
+        send: async ({ text }) => {
+          feishuSent.push(text);
+          return { disposition: "delivered", reason: "accepted" };
+        },
+      }, () => undefined);
+      engine.addHook((event) => {
+        if (!upstreamForwardsEvent(event)) return;
+        upstreamSent.push(workerResultText(event));
+      });
+      return channel;
+    };
+
+    const first = await startNamedEngine("claude-code", runtime, scratch, undefined, false);
+    roots.push(first.root);
+    const db = path.join(first.root, "state.sqlite");
+    const firstChannel = attachChannels(first.engine);
+    let workerId = "";
+    let sessionId = "";
+    let storedCount = 0;
+    let readCount = 0;
+    try {
+      await first.engine.start();
+      await firstChannel.start();
+      await firstChannel.receive({
+        id: "m1",
+        conversation: "eng",
+        text: "finish before restart",
+        replyTarget: { messageId: "m1" },
+      });
+      workerId = (await first.engine.list())[0]?.id ?? "";
+      expect(workerId).not.toBe("");
+      const before = await first.engine.store.getSession(workerId);
+      sessionId = before?.acpSessionId ?? "";
+      expect(sessionId).toMatch(/^stub-load-/);
+      const stored = await first.engine.events();
+      expect(stored.filter((event) => replayEvent(event))).toEqual([]);
+      storedCount = stored.filter((event) => event.workerId === workerId).length;
+      readCount = (await readWorker(first.engine, workerId)).events.length;
+      expect(feishuSent).toHaveLength(1);
+      expect(upstreamSent).toHaveLength(1);
+      expect(feishuSent.some((text) => text.includes("REPLAY_"))).toBe(false);
+      expect(upstreamSent.some((text) => text.includes("REPLAY_"))).toBe(false);
+      expect(await first.engine.store.listDeliveries()).toHaveLength(1);
+    } finally {
+      await firstChannel.stop();
+      await first.engine.close();
+      await first.store.close();
+    }
+
+    for (let pass = 1; pass <= 2; pass += 1) {
+      const restarted = await startNamedEngine("claude-code", runtime, first.root, db, false);
+      const channel = attachChannels(restarted.engine);
+      try {
+        await restarted.engine.start();
+        await channel.start();
+        await flushHooks();
+        const stored = await restarted.engine.events();
+        const workerEvents = stored.filter((event) => event.workerId === workerId);
+        expect(workerEvents.filter((event) => replayEvent(event))).toEqual([]);
+        expect(workerEvents).toHaveLength(storedCount + 1);
+        storedCount = workerEvents.length;
+        const view = await readWorker(restarted.engine, workerId);
+        expect(view.events).toHaveLength(readCount + 1);
+        expect(view.events.some((event) => event.summary.includes("REPLAY_"))).toBe(false);
+        readCount = view.events.length;
+        const recovered = workerEvents.filter((event) => event.type === "worker.update" && event.payload.recovered === true && event.payload.nativeSession === "loaded");
+        expect(recovered).toHaveLength(pass);
+        expect((await restarted.engine.store.getSession(workerId))?.state).toBe("idle");
+        expect((await restarted.engine.store.getSession(workerId))?.acpSessionId).toBe(sessionId);
+        expect(feishuSent).toHaveLength(1);
+        expect(upstreamSent).toHaveLength(1);
+        expect(feishuSent.some((text) => text.includes("REPLAY_"))).toBe(false);
+        expect(upstreamSent.some((text) => text.includes("REPLAY_"))).toBe(false);
+        const deliveries = await restarted.engine.store.listDeliveries();
+        expect(deliveries).toHaveLength(1);
+        expect(deliveries.some((row) => row.text.includes("REPLAY_"))).toBe(false);
+        expect(readFileSync(logFile, "utf8").match(new RegExp(`^replay ${replay}$`, "gm"))).toHaveLength(pass);
+      } finally {
+        await channel.stop();
+        await restarted.engine.close();
+        await restarted.store.close();
+      }
+    }
+
+    const follow = await startNamedEngine("claude-code", runtime, first.root, db, false);
+    const followChannel = attachChannels(follow.engine);
+    try {
+      await follow.engine.start();
+      await followChannel.start();
+      await followChannel.receive({
+        id: "m2",
+        conversation: "eng",
+        text: "continue after restart",
+        replyTarget: { messageId: "m2" },
+      });
+      await flushHooks();
+      const stored = await follow.engine.events();
+      expect(stored.filter((event) => replayEvent(event))).toEqual([]);
+      const view = await readWorker(follow.engine, workerId);
+      expect(view.events.filter((event) => event.summary.includes("REPLAY_"))).toEqual([]);
+      const followChunks = stored.filter((event) => event.workerId === workerId && event.type === "worker.update" && String(event.payload.text ?? "").includes("continue after restart"));
+      const ends = stored.filter((event) => event.workerId === workerId && event.type === "worker.turn_end" && String(event.payload.text ?? "").includes("continue after restart"));
+      expect(followChunks).toHaveLength(1);
+      expect(ends).toHaveLength(1);
+      expect(view.events.filter((event) => event.summary.includes("continue after restart"))).toHaveLength(followChunks.length + ends.length);
+      expect(feishuSent.filter((text) => text.includes("continue after restart"))).toHaveLength(1);
+      expect(upstreamSent.filter((text) => text.includes("continue after restart"))).toHaveLength(1);
+      expect(feishuSent.filter((text) => text.includes("REPLAY_"))).toEqual([]);
+      expect(upstreamSent.filter((text) => text.includes("REPLAY_"))).toEqual([]);
+      expect((await follow.engine.store.listDeliveries()).filter((row) => row.text.includes("REPLAY_"))).toEqual([]);
+    } finally {
+      await followChannel.stop();
+      await follow.engine.close();
+      await follow.store.close();
+    }
   });
 
   it.each([
@@ -326,13 +507,26 @@ class MismatchFactory extends ProcessRuntimeFactory {
   }
 }
 
-async function expectBuiltinNameLost(name: "claude-code" | "codex", state: "idle" | "awaiting_input" | "running", scenario: string, expectOverride = false): Promise<void> {
+async function expectRestartLost(
+  name: "claude-code" | "codex",
+  state: "idle" | "awaiting_input" | "running",
+  scenario: string,
+  expected: {
+    reason: "builtin_no_restore" | "in_flight_turn";
+    message: string;
+    agentName: string;
+    agentVersion: string;
+    expectOverride?: boolean;
+  },
+): Promise<void> {
   const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-builtin-"));
   roots.push(scratch);
   const logFile = path.join(scratch, "session-log");
   const env = {
     TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
     TIGERCAT_STUB_SESSION_LOG: logFile,
+    TIGERCAT_STUB_AGENT_NAME: expected.agentName,
+    TIGERCAT_STUB_AGENT_VERSION: expected.agentVersion,
   };
   const runtime = { ...stubRuntime(scenario, env), name };
   expect(builtinByName(name)?.name).toBe(name);
@@ -360,14 +554,18 @@ async function expectBuiltinNameLost(name: "claude-code" | "codex", state: "idle
   const second = await startNamedEngine(name, runtime, first.root, db);
   let eventIds: string[] = [];
   try {
-    if (expectOverride) {
+    if (expected.expectOverride) {
       const listed = listRuntimes(second.engine.config).find((entry) => entry.name === name);
       expect(listed?.overridden).toBe(true);
       expect(listed?.command).toBe(process.execPath);
     }
     await second.engine.settle();
-    await assertLostOnce(second.engine, spawned.workerId, "builtin_no_restore", "built-in runtime does not restore sessions yet", false);
+    await assertLostOnce(second.engine, spawned.workerId, expected.reason, expected.message, false);
     expect(readFileSync(logFile, "utf8")).not.toMatch(/^load /m);
+    expect(readFileSync(logFile, "utf8")).not.toContain("load-request");
+    const interrupted = (await second.engine.events()).filter((event) => event.workerId === spawned.workerId && event.payload.state === "interrupted");
+    expect(interrupted).toEqual([]);
+    expect((await second.engine.store.getSession(spawned.workerId))?.state).not.toBe("interrupted");
     eventIds = (await second.engine.events()).map((event) => event.id);
   } finally {
     await second.engine.close();
@@ -391,11 +589,134 @@ async function expectBuiltinNameLost(name: "claude-code" | "codex", state: "idle
     expect(follow.router).toBe(true);
     const lost = (await third.engine.events()).filter((event) => event.type === "worker.lost" && event.workerId === spawned.workerId);
     expect(lost).toHaveLength(1);
+    expect(lost[0]?.payload.reason).toBe(expected.reason);
     expect(readFileSync(logFile, "utf8")).not.toMatch(/^load /m);
+    expect(readFileSync(logFile, "utf8")).not.toContain("load-request");
   } finally {
     await third.engine.close();
     await third.store.close();
   }
+}
+
+async function expectIdentityRestored(options: {
+  runtimeName: string;
+  agentName: string;
+  agentVersion: string;
+  expectOverride?: boolean;
+}): Promise<void> {
+  const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-identity-"));
+  roots.push(scratch);
+  const logFile = path.join(scratch, "session-log");
+  const env = {
+    TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
+    TIGERCAT_STUB_SESSION_LOG: logFile,
+    TIGERCAT_STUB_AGENT_NAME: options.agentName,
+    TIGERCAT_STUB_AGENT_VERSION: options.agentVersion,
+  };
+  const runtime = { ...stubRuntime("session-load", env), name: options.runtimeName };
+  const first = await startNamedEngine(options.runtimeName, runtime, scratch);
+  roots.push(first.root);
+  const db = path.join(first.root, "state.sqlite");
+  const spawned = await first.engine.spawn({
+    runtime: options.runtimeName,
+    prompt: "remember this session",
+    threads: ["feishu:eng:cli"],
+  });
+  const ended = await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+  const before = await first.engine.store.getSession(spawned.workerId);
+  expect(before?.acpSessionId).toMatch(/^stub-load-/);
+  expect(before?.state).toBe("idle");
+  expect(await first.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(1);
+  await first.engine.close();
+  await first.store.close();
+
+  const second = await startNamedEngine(options.runtimeName, runtime, first.root, db);
+  try {
+    if (options.expectOverride) {
+      const listed = listRuntimes(second.engine.config).find((entry) => entry.name === options.runtimeName);
+      expect(listed?.overridden).toBe(true);
+    }
+    await second.engine.settle();
+    const after = await second.engine.store.getSession(spawned.workerId);
+    expect(after?.state).toBe("idle");
+    expect(after?.acpSessionId).toBe(before?.acpSessionId);
+    expect(await second.engine.store.subscriptionsForWorker(spawned.workerId)).toHaveLength(1);
+    expect((await second.engine.events()).some((event) => event.type === "worker.lost" && event.workerId === spawned.workerId)).toBe(false);
+    expect((await second.engine.store.getSession(spawned.workerId))?.state).not.toBe("interrupted");
+    const recovered = (await second.engine.events()).filter((event) => event.workerId === spawned.workerId && event.type === "worker.update" && event.payload.nativeSession === "loaded");
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.payload.recovered).toBe(true);
+    expect(readFileSync(logFile, "utf8")).toContain(`load ${before?.acpSessionId}`);
+    const follow = await second.engine.ingest({
+      source: "feishu",
+      thread: "feishu:eng:cli",
+      author: "keith",
+      text: "continue after restart",
+      kind: "im.message",
+      timestamp: Date.now(),
+    });
+    expect(follow.deliveredTo).toEqual([spawned.workerId]);
+    expect(follow.router).toBe(false);
+    await waitForEvent(second.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end" && event.id !== ended.id);
+  } finally {
+    await second.engine.close();
+    await second.store.close();
+  }
+}
+
+async function expectCapabilityLost(agentName: string, agentVersion: string): Promise<void> {
+  const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-capability-"));
+  roots.push(scratch);
+  const logFile = path.join(scratch, "session-log");
+  const env = {
+    TIGERCAT_STUB_SESSION_LOG: logFile,
+    TIGERCAT_STUB_AGENT_NAME: agentName,
+    TIGERCAT_STUB_AGENT_VERSION: agentVersion,
+  };
+  const runtime = { ...stubRuntime("no-session-load", env), name: "claude-code" };
+  const first = await startNamedEngine("claude-code", runtime, scratch);
+  roots.push(first.root);
+  const db = path.join(first.root, "state.sqlite");
+  const spawned = await first.engine.spawn({
+    runtime: "claude-code",
+    prompt: "finish before restart",
+    threads: ["feishu:eng:cli"],
+  });
+  await waitForEvent(first.engine, (event) => event.workerId === spawned.workerId && event.type === "worker.turn_end");
+  expect((await first.engine.store.getSession(spawned.workerId))?.state).toBe("idle");
+  await first.engine.close();
+  await first.store.close();
+  const second = await startNamedEngine("claude-code", runtime, first.root, db);
+  try {
+    await assertLostOnce(second.engine, spawned.workerId, "load_unsupported");
+    let log = "";
+    try {
+      log = readFileSync(logFile, "utf8");
+    } catch {
+      log = "";
+    }
+    expect(log).not.toContain("load-request");
+  } finally {
+    await second.engine.close();
+    await second.store.close();
+  }
+}
+
+async function readWorker(engine: Engine, workerId: string): Promise<{ events: Array<{ summary: string }> }> {
+  const cli = await engine.read(workerId);
+  const router = await engine.tools.read(workerId);
+  expect(router).toEqual(cli);
+  return cli as { events: Array<{ summary: string }> };
+}
+
+function replayEvent(event: TigerEvent): boolean {
+  const text = typeof event.payload.text === "string" ? event.payload.text : "";
+  const kind = typeof event.payload.sessionUpdate === "string" ? event.payload.sessionUpdate : "";
+  return text.startsWith("REPLAY_") || kind === "usage_update" || kind === "user_message_chunk" || kind === "agent_thought_chunk";
+}
+
+async function flushHooks(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 40));
 }
 
 async function expectNonBuiltinLost(scenario: string, reason: string): Promise<void> {
@@ -466,7 +787,7 @@ function clearAcpSessionId(file: string, workerId: string): void {
   }
 }
 
-async function startNamedEngine(name: string, runtime: RuntimeConfig, workspaceRoot: string, db?: string) {
+async function startNamedEngine(name: string, runtime: RuntimeConfig, workspaceRoot: string, db?: string, autoStart = true) {
   const root = db ? workspaceRoot : mkdtempSync(path.join(tmpdir(), "tigercat-stdio-"));
   const store = SqliteStore.open(db ?? path.join(root, "state.sqlite"));
   const config = defaultConfig();
@@ -479,7 +800,7 @@ async function startNamedEngine(name: string, runtime: RuntimeConfig, workspaceR
     factory: new ProcessRuntimeFactory({ handshakeTimeoutMs: 8_000 }),
     workspaceRoot: root,
   });
-  await engine.start();
+  if (autoStart) await engine.start();
   return { engine, store, root };
 }
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { Readable, Transform, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { Clock } from "./clock.js";
+import { restoreGate } from "./builtins.js";
 import { TigerError } from "./errors.js";
 import { redactText } from "./redact.js";
 import type { RuntimeConfig } from "./types.js";
@@ -277,6 +278,11 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
       Readable.toWeb(guardedStdout) as ReadableStream<Uint8Array>,
     );
     const updates: RuntimeUpdate[] = [];
+    // True only while the session/load request is outstanding. Adapters replay
+    // prior conversation as session/update notifications in that window. Those
+    // notifications are dropped here, so they are neither stored nor forwarded.
+    // The flag flips off when the request settles, before the next prompt.
+    const sessionLoad = { inFlight: false };
     const connection = acp
       .client({ name: "tigercat" })
       .onRequest(acp.methods.client.session.requestPermission, async (request) =>
@@ -298,6 +304,7 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
         throw acp.RequestError.invalidRequest(undefined, "terminal is not available");
       })
       .onNotification(acp.methods.client.session.update, (note) => {
+        if (sessionLoad.inFlight) return;
         const update = toUpdate(note.params.update);
         updates.push(update);
         ctx.onUpdate(update);
@@ -332,7 +339,7 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
         );
       }
       const session = ctx.resumeAcpSessionId
-        ? await loadAcpSession(connection, ctx, runtime, timeoutMs, launchError, init.agentCapabilities?.loadSession === true)
+        ? await loadAcpSession(connection, ctx, runtime, timeoutMs, launchError, init, sessionLoad)
         : await withTimeout(
           Promise.race([
             connection.agent
@@ -360,7 +367,7 @@ export class ProcessRuntimeFactory implements RuntimeFactory {
       }
       proc.off("error", onLaunchError);
       connection.close();
-      if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed")) {
+      if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "builtin_no_restore")) {
         throw error;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -380,6 +387,12 @@ interface PromptSession {
 }
 
 class LoadedSession implements PromptSession {
+  /**
+   * `sessionId` is the id that was sent on `session/load`, not a field read
+   * back from the response. codex-acp 2.7.0 omits `sessionId` on that
+   * response, so this handle cannot disagree with the stored id and
+   * `session_mismatch` does not fire for it.
+   */
   constructor(
     private readonly connection: acp.ClientConnection,
     readonly sessionId: string,
@@ -409,11 +422,15 @@ async function loadAcpSession(
   runtime: RuntimeConfig,
   timeoutMs: number,
   launchError: Promise<never>,
-  advertised: boolean,
+  init: acp.InitializeResponse,
+  sessionLoad: { inFlight: boolean },
 ): Promise<PromptSession> {
   const sessionId = ctx.resumeAcpSessionId;
   if (!sessionId) throw new TigerError("load_failed", `${runtime.name}: session/load requires a session id`);
-  if (!advertised) throw new TigerError("load_unsupported", `${runtime.name} does not advertise loadSession`);
+  const gate = restoreGate(init.agentInfo, init.agentCapabilities?.loadSession === true);
+  if (gate === "load_unsupported") throw new TigerError("load_unsupported", `${runtime.name} does not advertise loadSession`);
+  if (gate === "builtin_no_restore") throw new TigerError("builtin_no_restore", "built-in runtime does not restore sessions yet");
+  sessionLoad.inFlight = true;
   try {
     const loaded = await withTimeout(
       Promise.race([
@@ -429,9 +446,11 @@ async function loadAcpSession(
     );
     return new LoadedSession(connection, sessionId, loaded ?? {});
   } catch (error) {
-    if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed")) throw error;
+    if (error instanceof TigerError && (error.code === "load_unsupported" || error.code === "load_failed" || error.code === "builtin_no_restore")) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new TigerError("load_failed", `${runtime.name}: session/load failed: ${redactText(message)}`);
+  } finally {
+    sessionLoad.inFlight = false;
   }
 }
 

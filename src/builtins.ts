@@ -19,6 +19,44 @@ export const CLAUDE_AGENT_ACP_VERSION = "0.108.0";
 export const CODEX_ACP_PACKAGE = "@agentclientprotocol/codex-acp";
 export const CODEX_ACP_VERSION = "2.7.0";
 
+/**
+ * `agentInfo.name` from each pinned adapter's `initialize` response.
+ * claude-agent-acp 0.108.0 sets `agentInfo.name` to `package.json`'s `name`
+ * in `dist/v1/acp-agent.js` (and the same string in `dist/v2/agent.js`).
+ * codex-acp 2.7.0 sets it from the bundled `package.json` `name` in `dist/index.js`.
+ */
+export const CLAUDE_AGENT_INFO_NAME = "@agentclientprotocol/claude-agent-acp";
+export const CODEX_AGENT_INFO_NAME = "@agentclientprotocol/codex-acp";
+
+/** Versions whose `session/load` may run after restart. Name and version must both match. */
+export const RESTORE_IDENTITY_ALLOWLIST: readonly { readonly name: string; readonly version: string }[] = [
+  { name: CLAUDE_AGENT_INFO_NAME, version: CLAUDE_AGENT_ACP_VERSION },
+  { name: CODEX_AGENT_INFO_NAME, version: CODEX_ACP_VERSION },
+];
+
+const BUILTIN_ADAPTER_INFO_NAMES = new Set(RESTORE_IDENTITY_ALLOWLIST.map((entry) => entry.name));
+
+export type RestoreGate = "allow" | "builtin_no_restore" | "load_unsupported";
+
+/**
+ * Whether restart may send `session/load` after `initialize`.
+ * A built-in adapter identity is `agentInfo.name` of one of the pinned packages,
+ * at any version. Only the allowlisted version with `loadSession: true` may load.
+ * Any other name keeps the user-runtime rule: load when `loadSession` is advertised.
+ * A missing `agentInfo` is not a built-in identity.
+ */
+export function restoreGate(
+  identity: { name?: string; version?: string } | null | undefined,
+  loadSession: boolean,
+): RestoreGate {
+  if (!loadSession) return "load_unsupported";
+  const name = identity?.name ?? "";
+  if (!BUILTIN_ADAPTER_INFO_NAMES.has(name)) return "allow";
+  const version = identity?.version ?? "";
+  const allowed = RESTORE_IDENTITY_ALLOWLIST.some((entry) => entry.name === name && entry.version === version);
+  return allowed ? "allow" : "builtin_no_restore";
+}
+
 export interface AdapterSpec {
   name: "claude-code" | "codex";
   product: string;
