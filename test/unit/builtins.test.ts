@@ -5,17 +5,53 @@ import { describe, expect, it } from "vitest";
 import {
   buildAdapterCommand,
   builtinByName,
+  CLAUDE_AGENT_ACP_VERSION,
+  CLAUDE_AGENT_INFO_NAME,
+  CODEX_ACP_VERSION,
+  CODEX_AGENT_INFO_NAME,
   launchConfig,
   listRuntimes,
   npxCliPath,
   planRuntimeTest,
   resolveRuntime,
+  RESTORE_IDENTITY_ALLOWLIST,
+  restoreGate,
 } from "../../src/builtins.js";
 import { defaultConfig } from "../../src/config.js";
 import { TigerError } from "../../src/errors.js";
 import type { RuntimeConfig } from "../../src/types.js";
 
 const quiet: NodeJS.ProcessEnv = { PATH: "" };
+
+describe("session restore identity gate", () => {
+  it("allowlists only the pinned adapter name and version pairs", () => {
+    expect(RESTORE_IDENTITY_ALLOWLIST).toEqual([
+      { name: "@agentclientprotocol/claude-agent-acp", version: "0.108.0" },
+      { name: "@agentclientprotocol/codex-acp", version: "2.7.0" },
+    ]);
+    expect(CLAUDE_AGENT_INFO_NAME).toBe("@agentclientprotocol/claude-agent-acp");
+    expect(CODEX_AGENT_INFO_NAME).toBe("@agentclientprotocol/codex-acp");
+    expect(CLAUDE_AGENT_ACP_VERSION).toBe("0.108.0");
+    expect(CODEX_ACP_VERSION).toBe("2.7.0");
+  });
+
+  it("allows an exact allowlisted identity only when loadSession is true", () => {
+    for (const entry of RESTORE_IDENTITY_ALLOWLIST) {
+      expect(restoreGate(entry, true)).toBe("allow");
+      expect(restoreGate(entry, false)).toBe("load_unsupported");
+      expect(restoreGate({ name: entry.name, version: "9.9.9" }, true)).toBe("builtin_no_restore");
+      expect(restoreGate({ name: entry.name, version: "9.9.9" }, false)).toBe("load_unsupported");
+    }
+  });
+
+  it("lets a non-built-in identity load when loadSession is advertised", () => {
+    expect(restoreGate({ name: "custom-acp", version: "1.0.0" }, true)).toBe("allow");
+    expect(restoreGate({ name: "tigercat-stub", version: "0.0.0" }, true)).toBe("allow");
+    expect(restoreGate(undefined, true)).toBe("allow");
+    expect(restoreGate(null, true)).toBe("allow");
+    expect(restoreGate({ name: "custom-acp", version: "1.0.0" }, false)).toBe("load_unsupported");
+  });
+});
 
 describe("built-in ACP runtimes", () => {
   it("pins the official claude-code and codex adapters", () => {

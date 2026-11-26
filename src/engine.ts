@@ -12,7 +12,7 @@ import { TigerError } from "./errors.js";
 import { newId } from "./ids.js";
 import { decidePermission, type PermissionOption } from "./permissions.js";
 import { SecretRegistry } from "./redact.js";
-import { builtinByName, resolveRuntime } from "./builtins.js";
+import { resolveRuntime } from "./builtins.js";
 import { reapMatchingProcess, type LaunchContext, type RuntimeFactory, type RuntimeHandle } from "./runtime.js";
 import { spill } from "./spill.js";
 import { acceptsSend, assertTransition, isTerminal } from "./state.js";
@@ -343,24 +343,20 @@ export class Engine {
   }
 
   /**
-   * The in-memory ACP handle is gone. Load the original session when the
-   * runtime supports it; otherwise mark the Worker lost and drop subscriptions
-   * so the next event goes through the Router. `interrupted` stays a public
-   * state for rows already stored that way. Automatic recovery writes `lost`.
+   * The in-memory ACP handle is gone. A turn that was still running has no
+   * result, so it is marked lost and `session/load` is not called. Otherwise
+   * load the original session when the adapter's `initialize` identity allows
+   * it. `interrupted` stays a public state for rows already stored that way.
+   * Automatic recovery writes `lost`, never `interrupted`.
    */
   private async recoverWorker(session: SessionRecord): Promise<void> {
     if (this.closed) return;
     this.reapOrphan(session);
     if (this.closed) return;
-    // Built-in claude-code and codex adapters advertise loadSession, but
-    // restart does not call it yet. Every non-terminal built-in Worker is lost.
-    if (session.runtime && builtinByName(session.runtime)) {
-      await this.markLost(session, "builtin_no_restore");
-      return;
-    }
     // A prompt that had not finished has no result to restore. session/load
     // reloads the session id only, so leaving the Worker idle would drop the
-    // turn with no end or error event.
+    // turn with no end or error event. This is checked before initialize, so
+    // a mid-turn Worker never reaches the identity allowlist.
     if (session.state === "running" || session.state === "starting") {
       await this.markLost(session, "in_flight_turn");
       return;

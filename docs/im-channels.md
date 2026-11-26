@@ -34,7 +34,7 @@ tigercat feishu --cwd /absolute/path/to/repo --runtime feishu-worker
 
 正在执行时，继续在私聊发消息或在群里 @ 机器人，支持 ACP steering 的 Worker 会把补充指令并入同一轮。每条通过授权的消息在接收时显示 Typing，结束时换为 DONE，失败或取消时换为 CrossMark。本轮答案只回复发起消息一次。回复采用飞书 2.0 卡片，正文支持 Markdown，底部的「工作区」取自该渠道进程启动时的 `--cwd` 目录名，随后显示 Worker 内核和 ACP 会话报告的模型及思考档位。已结束的会话会用下一条消息开始新一轮。自定义 Worker 未声明 steering 能力时，补充消息在上一轮结束后单独执行并回复。不同会话可并行工作。
 
-进程重启后，内置 runtime 暂不恢复会话：不调用 `session/load`，旧 Worker 标成 `lost`（`worker.lost`，`reason` 是 `builtin_no_restore`），订阅回到 Router。判定按 runtime 名字，所以配置里同名覆盖内置的 `claude-code` 或 `codex` 也不恢复，同样标成 `lost`（`reason` 是 `builtin_no_restore`）；按名字还是按 adapter 判定，留到以后真实 adapter 的 `session/load`。锁定的 adapter 会声明 `loadSession: true`，这里还没有用上。下条新消息会创建 Worker，旧工作区保留。已接收但被重启打断的任务需用一条新消息提交。当前支持文本入站与卡片回复。
+进程重启后，是否调用 `session/load` 看 adapter 在 `initialize` 里报告的 `agentInfo`，不看 runtime 名字。名单只有 `@agentclientprotocol/claude-agent-acp` `0.108.0` 和 `@agentclientprotocol/codex-acp` `2.7.0`，并且 `loadSession` 为 true。同名但版本不同标成 `lost`（`worker.lost`，`reason` 是 `builtin_no_restore`），订阅回到 Router，不发送 `session/load`。`loadSession` 不是 true 时 `reason` 是 `load_unsupported`。其他 `agentInfo.name` 在声明了 `loadSession` 时尝试加载。名叫 `claude-code` 的配置按实际 adapter 的身份判断。`session/load` 在途重放的 `session/update` 不会记成新的 `worker.update`，也不会转发。`running` 或 `starting` 仍是 `lost`（`reason` 是 `in_flight_turn`）。`codex-acp` 2.7.0 的加载响应没有 `sessionId`，不会因此出现 `session_mismatch`。这不表示 M0 已经通过。下条新消息在会话没有恢复时会创建 Worker，旧工作区保留。已接收但被重启打断的任务需用一条新消息提交。当前支持文本入站与卡片回复。
 
 ## 新增一个 IM 适配器
 

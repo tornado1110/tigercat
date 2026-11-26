@@ -12,6 +12,8 @@ import * as acp from "@agentclientprotocol/sdk";
 
 const scenario = process.env.TIGERCAT_STUB_SCENARIO ?? "ok";
 const stubName = process.env.TIGERCAT_STUB_NAME ?? "tigercat-stub";
+const agentName = process.env.TIGERCAT_STUB_AGENT_NAME ?? stubName;
+const agentVersion = process.env.TIGERCAT_STUB_AGENT_VERSION ?? "0.0.0";
 
 interface Session {
   pending: AbortController | null;
@@ -33,14 +35,14 @@ const connection = acp
       return {
         protocolVersion: 999,
         agentCapabilities: { loadSession: false },
-        agentInfo: { name: stubName, version: "0.0.0" },
+        agentInfo: { name: agentName, version: agentVersion },
       };
     }
     return {
       protocolVersion: acp.PROTOCOL_VERSION,
       _meta: scenario === "steer" ? { steering: { supported: true } } : undefined,
       agentCapabilities: { loadSession: scenario !== "no-session-load" },
-      agentInfo: { name: stubName, version: "0.0.0" },
+      agentInfo: { name: agentName, version: agentVersion },
     };
   })
   .onRequest(acp.methods.agent.session.new, ({ params }) => {
@@ -54,7 +56,8 @@ const connection = acp
     void params;
     return { sessionId, configOptions: [{ id: "model", name: "Model", category: "model", type: "select" as const, currentValue: "test-model", options: [{ value: "test-model", name: "Test Model" }] }] };
   })
-  .onRequest(acp.methods.agent.session.load, ({ params }) => {
+  .onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
+    sessionNote(`load-request ${params.sessionId}`);
     if (scenario === "session-load-fail") throw acp.RequestError.invalidParams(undefined, "session load failed");
     if (scenario !== "session-load" && scenario !== "session-load-hang") throw acp.RequestError.methodNotFound("session/load");
     const expected = persistedSessionId();
@@ -62,6 +65,11 @@ const connection = acp
       throw acp.RequestError.invalidParams(undefined, "unknown session");
     }
     sessions.set(params.sessionId, { pending: null });
+    const count = replayCount();
+    for (let index = 0; index < count; index += 1) {
+      await replayUpdate(client, params.sessionId, index);
+    }
+    sessionNote(`replay ${count}`);
     sessionNote(`load ${params.sessionId}`);
     return {};
   })
@@ -187,6 +195,23 @@ function promptText(prompt: unknown): string {
       return record.type === "text" && typeof record.text === "string" ? record.text : "";
     })
     .join("");
+}
+
+function replayCount(): number {
+  const count = Number(process.env.TIGERCAT_STUB_REPLAY ?? "0");
+  return Number.isInteger(count) && count > 0 ? count : 0;
+}
+
+function replayUpdate(client: acp.AgentContext, sessionId: string, index: number): Promise<void> {
+  const text = `REPLAY_${index}`;
+  const update = index % 4 === 0
+    ? { sessionUpdate: "user_message_chunk" as const, content: { type: "text" as const, text } }
+    : index % 4 === 1
+      ? { sessionUpdate: "agent_message_chunk" as const, content: { type: "text" as const, text } }
+      : index % 4 === 2
+        ? { sessionUpdate: "agent_thought_chunk" as const, content: { type: "text" as const, text } }
+        : { sessionUpdate: "usage_update" as const, used: index, size: 128 };
+  return client.notify(acp.methods.client.session.update, { sessionId, update });
 }
 
 function chunk(client: acp.AgentContext, sessionId: string, text: string): Promise<void> {
