@@ -71,6 +71,22 @@ const connection = acp
     }
     sessionNote(`replay ${count}`);
     sessionNote(`load ${params.sessionId}`);
+    if (process.env.TIGERCAT_STUB_POST_LOAD === "1") {
+      const sessionId = params.sessionId;
+      // After this handler returns, the SDK writes the session/load response.
+      // setImmediate runs after that write is queued, matching an adapter that
+      // emits fresh session state once load has completed.
+      setImmediate(() => {
+        sessionNote(`post-load ${sessionId}`);
+        void client.notify(acp.methods.client.session.update, {
+          sessionId,
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [{ name: "post-load", description: "POST_LOAD_COMMANDS" }],
+          },
+        });
+      });
+    }
     return {};
   })
   .onRequest("_session/steering", (raw) => raw as {
