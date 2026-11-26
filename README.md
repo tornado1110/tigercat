@@ -134,6 +134,8 @@ args = ["acp"]
 
 宿主重投同一条事件时，应复用 `_meta.event_id`（非空字符串）；可同时传 `_meta.timestamp`（非负毫秒时间戳）。同一身份只接纳一次，内容变更返回冲突；有事件 ID 但省略时间时使用稳定的 `0`。不传事件 ID 的普通 prompt 仍是独立提交。认领后未完成的提交返回 `ingest_incomplete`，需要核对已有执行，不能盲目重放。
 
+启动方式、宿主片段、规则和 Thread，以及这条路径还没有跑过的内容，写在 [docs/cc-connect.md](docs/cc-connect.md)。那一页不附录像，也不把飞书四步或 M0 标成已完成。
+
 ## 运维
 
 前台的启动、停止和重启，凭据如何分开，以及脚本化演示的配置，写在 [docs/operations.md](docs/operations.md)。[examples/config.example.toml](examples/config.example.toml) 没有设置 `coordinator_runtime`。它不是模型 Router，本仓库也不附带这样一个程序。没有 `start` 或 `stop` 子命令。`runtime add --env` 会把明文写进 `config.toml`；不要把 API key 放在那里。

@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 089f7fd360e8aedd13d91b89e9bb7a6cce303899 -->
+<!-- i18n-source: README.md @ 88f23225cd4c862315fba74419425867c3561b84 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # TigerCat
@@ -117,6 +117,8 @@ args = ["acp"]
 ```
 
 Pass a Thread id on the prompt `_meta.thread_id` when the host knows the topic or pull request. Without one, the upstream session is its own Thread (`acp:<sessionId>`).
+
+How to start the process, the host snippet, the rules and Thread behavior, and what this path has not run, are in [docs/cc-connect.md](docs/cc-connect.md). That page includes no recording, and it does not mark the four Feishu steps or M0 as done.
 
 ## Operations
 
