@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 089f7fd360e8aedd13d91b89e9bb7a6cce303899 -->
+<!-- i18n-source: README.md @ 88f23225cd4c862315fba74419425867c3561b84 -->
 > 간체 중국어판이 기준입니다. 이 번역은 원문보다 늦을 수 있으며, 기계 번역의 도움을 받았습니다. 수정은 환영합니다.
 
 # TigerCat
@@ -112,6 +112,8 @@ args = ["acp"]
 ```
 
 호스트가 주제나 pull request를 알고 있으면 prompt의 `_meta.thread_id`에 Thread id를 넘깁니다. 없으면 업스트림 세션 자체가 하나의 Thread가 됩니다(`acp:<sessionId>`).
+
+시작 방법, 호스트 조각, 규칙과 Thread, 그리고 이 경로가 아직 실행하지 않은 내용은 [docs/cc-connect.md](docs/cc-connect.md)에 있습니다. 그 페이지에는 녹화가 없고, Feishu 4단계나 M0을 완료로 표시하지도 않습니다.
 
 ## 운영
 

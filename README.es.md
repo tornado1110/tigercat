@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 089f7fd360e8aedd13d91b89e9bb7a6cce303899 -->
+<!-- i18n-source: README.md @ 88f23225cd4c862315fba74419425867c3561b84 -->
 > La versión en chino simplificado es la fuente autorizada. Esta traducción puede quedar rezagada, se hizo con ayuda automática y las correcciones son bienvenidas.
 
 # TigerCat
@@ -112,6 +112,8 @@ args = ["acp"]
 ```
 
 Cuando el host conoce el tema o el pull request, pasa el id del Thread en `_meta.thread_id` del prompt. Si no hay uno, la sesión de arriba es por sí misma un Thread (`acp:<sessionId>`).
+
+Cómo arrancarlo, el fragmento del host, las reglas y el Thread, y lo que esta ruta no ha ejecutado, está en [docs/cc-connect.md](docs/cc-connect.md). Esa página no incluye una grabación y no marca los cuatro pasos de Feishu ni M0 como hechos.
 
 ## Operación
 

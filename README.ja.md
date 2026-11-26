@@ -1,4 +1,4 @@
-<!-- i18n-source: README.md @ 089f7fd360e8aedd13d91b89e9bb7a6cce303899 -->
+<!-- i18n-source: README.md @ 88f23225cd4c862315fba74419425867c3561b84 -->
 > 簡体字中国語版が正本です。この翻訳は遅れることがあり、機械翻訳の助けを借りて作りました。訂正を歓迎します。
 
 # TigerCat
@@ -112,6 +112,8 @@ args = ["acp"]
 ```
 
 ホストがトピックまたは pull request を知っているときは、prompt の `_meta.thread_id` に Thread id を渡します。無い場合、上流のセッション自身が一つの Thread になります（`acp:<sessionId>`）。
+
+起動方法、ホスト側の断片、ルールと Thread、そしてこの経路がまだ実行していない内容は [docs/cc-connect.md](docs/cc-connect.md) にあります。そのページに録画はなく、Feishu の 4 ステップや M0 を完了とも書いていません。
 
 ## 運用
 
