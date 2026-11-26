@@ -353,6 +353,98 @@ describe("restart recovery over stdio", () => {
     }
   });
 
+  it("a session/update after the load response is stored and not delivered, across two restarts", async () => {
+    const replay = 4;
+    const scratch = mkdtempSync(path.join(tmpdir(), "tigercat-post-load-"));
+    roots.push(scratch);
+    const logFile = path.join(scratch, "session-log");
+    const env = {
+      TIGERCAT_STUB_SESSION_FILE: path.join(scratch, "session-id"),
+      TIGERCAT_STUB_SESSION_LOG: logFile,
+      TIGERCAT_STUB_REPLAY: String(replay),
+      TIGERCAT_STUB_POST_LOAD: "1",
+      TIGERCAT_STUB_AGENT_NAME: CLAUDE_AGENT_INFO_NAME,
+      TIGERCAT_STUB_AGENT_VERSION: CLAUDE_AGENT_ACP_VERSION,
+    };
+    const runtime = { ...stubRuntime("session-load", env), name: "claude-code" };
+    const feishuSent: string[] = [];
+    const upstreamSent: string[] = [];
+    const attachChannels = (engine: Engine) => {
+      const channel = new ImChannel(engine, "feishu", "claude-code", {
+        send: async ({ text }) => {
+          feishuSent.push(text);
+          return { disposition: "delivered", reason: "accepted" };
+        },
+      }, () => undefined);
+      engine.addHook((event) => {
+        if (!upstreamForwardsEvent(event)) return;
+        upstreamSent.push(workerResultText(event));
+      });
+      return channel;
+    };
+
+    const first = await startNamedEngine("claude-code", runtime, scratch, undefined, false);
+    roots.push(first.root);
+    const db = path.join(first.root, "state.sqlite");
+    const firstChannel = attachChannels(first.engine);
+    let workerId = "";
+    try {
+      await first.engine.start();
+      await firstChannel.start();
+      await firstChannel.receive({
+        id: "m1",
+        conversation: "eng",
+        text: "finish before restart",
+        replyTarget: { messageId: "m1" },
+      });
+      workerId = (await first.engine.list())[0]?.id ?? "";
+      expect(workerId).not.toBe("");
+      expect((await first.engine.events()).filter((event) => replayEvent(event) || postLoadEvent(event))).toEqual([]);
+      expect(feishuSent).toHaveLength(1);
+      expect(upstreamSent).toHaveLength(1);
+      expect(await first.engine.store.listDeliveries()).toHaveLength(1);
+    } finally {
+      await firstChannel.stop();
+      await first.engine.close();
+      await first.store.close();
+    }
+
+    for (let pass = 1; pass <= 2; pass += 1) {
+      const restarted = await startNamedEngine("claude-code", runtime, first.root, db, false);
+      const channel = attachChannels(restarted.engine);
+      try {
+        await restarted.engine.start();
+        await channel.start();
+        await waitForPostLoad(restarted.engine, workerId, pass);
+        await flushHooks();
+        const workerEvents = (await restarted.engine.events()).filter((event) => event.workerId === workerId);
+        expect(workerEvents.filter((event) => replayEvent(event))).toEqual([]);
+        const postLoad = workerEvents.filter((event) => postLoadEvent(event));
+        expect(postLoad).toHaveLength(pass);
+        expect(postLoad.every((event) => event.type === "worker.update" && event.payload.recovered !== true)).toBe(true);
+        const recovered = workerEvents.filter((event) => event.type === "worker.update" && event.payload.recovered === true && event.payload.nativeSession === "loaded");
+        expect(recovered).toHaveLength(pass);
+        const view = await readWorker(restarted.engine, workerId);
+        expect(view.events).toHaveLength(workerEvents.length);
+        expect(view.events.some((event) => event.summary.includes("REPLAY_"))).toBe(false);
+        expect(feishuSent).toHaveLength(1);
+        expect(upstreamSent).toHaveLength(1);
+        expect(feishuSent.some((text) => text.includes("REPLAY_") || text.includes("POST_LOAD_COMMANDS"))).toBe(false);
+        expect(upstreamSent.some((text) => text.includes("REPLAY_") || text.includes("POST_LOAD_COMMANDS"))).toBe(false);
+        const deliveries = await restarted.engine.store.listDeliveries();
+        expect(deliveries).toHaveLength(1);
+        expect(deliveries.some((row) => row.text.includes("REPLAY_") || row.text.includes("POST_LOAD_COMMANDS"))).toBe(false);
+        const log = readFileSync(logFile, "utf8");
+        expect(log.match(new RegExp(`^replay ${replay}$`, "gm"))).toHaveLength(pass);
+        expect(log.match(/^post-load /gm)).toHaveLength(pass);
+      } finally {
+        await channel.stop();
+        await restarted.engine.close();
+        await restarted.store.close();
+      }
+    }
+  });
+
   it.each([
     ["load_failed", "session-load-fail"],
     ["load_unsupported", "no-session-load"],
@@ -707,6 +799,20 @@ async function readWorker(engine: Engine, workerId: string): Promise<{ events: A
   const router = await engine.tools.read(workerId);
   expect(router).toEqual(cli);
   return cli as { events: Array<{ summary: string }> };
+}
+
+function postLoadEvent(event: TigerEvent): boolean {
+  return event.type === "worker.update" && event.payload.sessionUpdate === "available_commands_update";
+}
+
+async function waitForPostLoad(engine: Engine, workerId: string, count: number): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < 2_000) {
+    const found = (await engine.events()).filter((event) => event.workerId === workerId && postLoadEvent(event)).length;
+    if (found >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`post-load update count did not reach ${count}`);
 }
 
 function replayEvent(event: TigerEvent): boolean {
