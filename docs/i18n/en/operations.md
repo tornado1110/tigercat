@@ -1,4 +1,4 @@
-<!-- i18n-source: docs/operations.md @ 44a9f13225e143a826f146be03e325821aae92a0 -->
+<!-- i18n-source: docs/operations.md @ 73877ed61c016ea51e1037a352abfca41541e440 -->
 > The Simplified Chinese version is authoritative. This translation may lag behind it. Machine-assisted translation; corrections are welcome.
 
 # Operating TigerCat
@@ -274,12 +274,12 @@ not the name is on the list. A missing `agentInfo`, or an `agentInfo.name`
 that is neither of those names, is a user runtime: load is attempted when
 `loadSession` is advertised. A config named `claude-code` that points at an
 allowlisted adapter therefore restores; one that points elsewhere is judged
-by that process's own `initialize` identity. History replayed as `session/update` from the moment the `session/load`
-request is sent until its response is dropped and is not stored. TigerCat
-records one `worker.update` with `recovered` true and `nativeSession`
-`loaded`. Notifications the adapter sends after that response, such as
-claude-agent-acp's `available_commands_update`, are stored as ordinary
-`worker.update` rows. Feishu and the upstream ACP channel forward only
+by that process's own `initialize` identity. History replayed while the `session/load` request is in flight is dropped
+and is not stored. TigerCat records a `worker.update` with `recovered` true
+and `nativeSession` `loaded`. Status or metadata notifications the adapter
+sends after the load response (for example command lists, session info or
+usage) are stored as ordinary `worker.update` rows. They carry no old
+conversation text. Feishu and the upstream ACP channel forward only
 `worker.turn_end` and `worker.error`, so none of these rows are delivered
 externally. `running` or `starting` stays `in_flight_turn`
 above and is not loaded just because the identity is allowlisted. Restart
