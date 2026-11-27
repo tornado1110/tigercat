@@ -1,10 +1,91 @@
-# TigerCat
+# TigerCat · 把你的飞书变成 GrokBot
 
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
 
-面向编程代理的任务与 Worker 编排工具，可独立运行、接入飞书机器人，也可作为 Codex 插件提供。
+**在飞书里 @ 一下，让 Claude Code / Codex 接手代码任务。**
 
-TigerCat 的入口复用同一个 Engine 和 Worker 协议：独立运行时用 `tigercat acp`；作为 Codex 插件时，由当前 Codex 会话使用 TigerCat 的 MCP 工具调度 Worker，无需另外启动 Router 模型。插件目录为 [`plugins/codex`](plugins/codex/README.md)。飞书机器人可以用 [`tigercat feishu`](#飞书机器人) 直接收发消息。
+把“这个报错谁看一下”发进群，把“帮我改一下”发给机器人。TigerCat 把飞书消息交给你本机的编程 Agent，在指定仓库里处理任务，再把结果回到聊天里。
+
+你可以私聊它，也可以把它拉进工作群。代码问题在群里提出，Agent 在仓库里跟进，大家在同一个话题里继续讨论。
+
+## 在飞书里，你可以这样用
+
+下面是可以交给 Agent 的任务示例，执行范围取决于所选运行时、凭据和权限配置。
+
+> **排查报错**
+>
+> @TigerCat 看一下登录接口为什么返回 500，先定位原因。
+
+> **修改代码**
+>
+> @TigerCat 给这个接口补上分页，沿用项目现有的写法，跑一下相关测试。
+
+> **执行中补充要求**
+>
+> @TigerCat 补充一下，分页参数需要兼容旧客户端。
+
+> **熟悉项目**
+>
+> 这个仓库的鉴权逻辑在哪？帮我梳理一下请求链路。
+
+- **私聊交办，群里协作**。授权用户可私聊机器人，在已授权的群里 @ 它发起任务。
+- **边做边补充**。支持 ACP steering 的运行时会把后续消息并入当前轮。
+- **结果回到飞书**。消息表情显示处理状态，Markdown 卡片回复执行结果，并标注工作区和运行时。
+- **接上你已有的 Agent**。内置 Claude Code 和 Codex 运行时，也支持注册其他 ACP Worker。
+
+## 快速开始
+
+准备 Node.js 22.13 或更高版本，以及已安装、已配置凭据的 Codex 或 Claude Code。
+
+### 1. 安装 TigerCat
+
+在本仓库目录执行。
+
+```bash
+npm ci
+npm run build
+npm link
+```
+
+### 2. 连接你的项目与飞书
+
+切换到希望 Agent 处理的项目目录，启动机器人。
+
+```bash
+cd /absolute/path/to/your-project
+tigercat feishu connect
+```
+
+打开终端输出的飞书官方授权链接，确认创建 TigerCat 机器人。看到 `Feishu WebSocket connected.` 后，打开终端里的机器人私聊链接，发出第一条任务。
+
+保持这个终端进程运行。下次执行同一命令会复用绑定，每个进程绑定一个项目目录。首次接入优先使用已配置的默认 Worker，否则自动发现本机的 Codex 或 Claude Code，优先选择 Codex。
+
+也可以显式指定项目与运行时。
+
+```bash
+tigercat feishu connect --cwd /absolute/path/to/your-project --runtime codex
+```
+
+### 3. 拉进工作群
+
+把机器人加入群，将群 Chat ID 加入 `TIGERCAT_FEISHU_ALLOWED_CHATS`，再重启渠道进程。创建者默认获得使用权限，其他用户通过 `TIGERCAT_FEISHU_ALLOWED_USERS` 授权。
+
+```bash
+TIGERCAT_FEISHU_ALLOWED_CHATS=oc_your_chat_id tigercat feishu connect
+```
+
+在群里 @TigerCat，交给它一个具体任务。
+
+飞书文本渠道对需要交互确认的权限请求采用 `deny`，已显式配置的 `auto` 策略继续生效。权限配置、已有飞书应用接入和会话行为见配置文档。[飞书配置与新增 IM 渠道](docs/im-channels.md)
+
+## 架构与接入方式
+
+TigerCat 基于 Agent Client Protocol（ACP），负责连接聊天入口与编程 Agent，管理任务、Worker 和结果回传。飞书机器人之外，还提供独立 ACP 入口和 Codex 插件。[Agent Client Protocol](https://agentclientprotocol.com)
+
+<details>
+<summary>展开查看 Engine、Router 与 Worker 的工作方式</summary>
+
+TigerCat 的入口复用同一个 Engine 和 Worker 协议：独立运行时用 `tigercat acp`；作为 Codex 插件时，由当前 Codex 会话使用 TigerCat 的 MCP 工具调度 Worker，无需另外启动 Router 模型。插件目录为 [`plugins/codex`](plugins/codex/README.md)。飞书机器人可以用 [`tigercat feishu`](#快速开始) 直接收发消息。
 
 TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。独立模式对上游提供 ACP agent（`tigercat acp`），供 cc-connect 或 Zed 这样的宿主驱动；插件模式对当前 Codex 会话提供 Skill 和 MCP 工具。两种模式对下游都是 ACP 客户端，在已注册的 runtime 上启动 Worker。飞书和钉钉由可选宿主接入。
 
@@ -12,22 +93,9 @@ TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。独�
 
 插件模式下，当前 Codex 会话的原生 Shell、编辑和写文件工具由 Codex 控制。TigerCat 的 MCP 服务注册自己的工具，不能检查或移除 Codex 的原生工具。这些工具仍在 Router 的有效工具集里时，插件进程拒绝启动，也不会退到更松的权限模式。这不是工具隔离，M0 也没有通过。TigerCat 的 Skill 引导主会话把实现交给 Worker。Worker 权限策略约束 TigerCat 启动的 Worker，主会话直接调用工具时遵循 Codex 宿主设置。
 
-本仓库是第 1 周的可行性骨架，还不是完成的 M0。真实的 Claude Code / Codex 会话、一次飞书往返、用真实模型担任 Router，以及「某个厂商的 harness 没有原生 shell 或编辑工具」这一证明，都尚未验证。CI 通过 stdio stub 驱动 `claude-code` 和 `codex` 这两个 profile。真实二进制的手动命令见下文。TigerCat 自己的 MCP 目录不收录那些工具，这并不能说明下游 agent 自己带了哪些工具。跨频道进入和共享 PR 进入属于 M1，不是这个骨架的范围。
+当前处于可行性验证阶段。CI 使用 stdio stub 覆盖 `claude-code` 和 `codex` 两个 profile。待完成的验证包括真实 Claude Code / Codex 会话、飞书端到端往返、真实模型 Router，以及厂商 harness 的工具隔离。跨频道和共享 PR 接入列入后续里程碑。真实二进制的手动验证命令见下文。
 
-## 快速开始
-
-需要 Node.js 22.13 或更高版本。
-
-```bash
-npm install
-npm run build
-npm link
-
-tigercat runtime list
-tigercat runtime discover
-tigercat runtime test claude-code
-tigercat runtime test codex
-```
+</details>
 
 ## Codex 插件
 
@@ -44,12 +112,6 @@ Worker 的 `permission = "ask"` 会通过 MCP elicitation 交给当前 Codex 宿
 MCP 连接关闭时会清理 Worker。默认每个插件进程有隔离的临时状态；设置 `TIGERCAT_PLUGIN_DB` 可保留历史，同一个数据库只允许一个插件进程占用。重启后旧 Worker 标为中断，不自动重放任务；异常退出遗留的 `.plugin-lock` 需要确认旧进程退出后再移除。当前版本没有自动唤醒 Codex 会话、断线继续执行或持久结果投递的承诺。
 
 `lark-cli` 用于插件中的可选飞书业务操作。原生飞书机器人有独立的进程入口和机器人身份。
-
-## 飞书机器人
-
-在项目目录运行 `tigercat feishu connect`，打开命令输出的飞书官方链接，确认创建 TigerCat 机器人。连接成功后即可私聊，下次运行同一命令会复用绑定。每个进程绑定一个仓库。授权用户可以私聊机器人，也可以在明确授权的群里 @ 机器人。每个私聊或群共享一个 Worker。Worker 执行期间，支持 ACP steering 的运行时会将补充消息并入当前轮，结果统一回复发起消息。
-
-[飞书配置与新增 IM 渠道](docs/im-channels.md)
 
 ## 独立运行时
 
