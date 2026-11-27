@@ -160,22 +160,16 @@ const PRIVATE_INHERITED_ENV = new Set([
   "CC_PROJECT",
 ]);
 
-const CLAUDE_CREDENTIAL_ENV = new Set([
-  // These are the documented vendor credentials/overrides consumed by the
-  // Claude adapter. Other secret-shaped variables must be configured on a
-  // specific runtime instead of inherited by every Worker.
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "CLAUDE_CODE_EXECUTABLE",
-]);
-
-const CODEX_CREDENTIAL_ENV = new Set([
-  // These are the documented vendor credentials/override consumed by the
-  // Codex adapter.
-  "CODEX_API_KEY",
-  "CODEX_PATH",
-  "OPENAI_API_KEY",
-]);
+// Credentials consumed by each built-in. Other providers can use explicit runtime env.
+const RUNTIME_CREDENTIAL_ENV: Readonly<Record<string, ReadonlySet<string>>> = {
+  "claude-code": new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_EXECUTABLE"]),
+  codex: new Set(["CODEX_API_KEY", "CODEX_PATH", "OPENAI_API_KEY"]),
+  "deepseek-harness": new Set(["DEEPSEEK_API_KEY"]),
+  pi: new Set(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"]),
+  zcode: new Set(),
+  kimicode: new Set(["KIMI_API_KEY", "KIMI_MODEL_API_KEY", "KIMI_WEB_SEARCH_API_KEY"]),
+  trae: new Set(["TRAECLI_PERSONAL_ACCESS_TOKEN"]),
+};
 
 function secretShapedEnv(name: string): boolean {
   return /(?:API_KEY|AUTH_TOKEN|ACCESS_TOKEN|SECRET|PASSWORD|CREDENTIAL|TOKEN)/i.test(name);
@@ -191,11 +185,7 @@ export function buildWorkerEnvironment(
   providerCredentialEnv?: string,
 ): NodeJS.ProcessEnv {
   const inherited: NodeJS.ProcessEnv = {};
-  const allowedCredentials = runtimeName === "claude-code"
-    ? CLAUDE_CREDENTIAL_ENV
-    : runtimeName === "codex"
-      ? CODEX_CREDENTIAL_ENV
-      : new Set<string>();
+  const allowedCredentials = RUNTIME_CREDENTIAL_ENV[runtimeName ?? ""] ?? new Set<string>();
   for (const [name, value] of Object.entries(parentEnv)) {
     // Windows environment names are case-insensitive even when Node exposes
     // the spelling used by the parent process.

@@ -7,7 +7,7 @@
 
 A Super-agent router for coding agents: one resident ACP router that dispatches work to Claude Code, Codex, or any ACP agent.
 
-TigerCat sits on the [Agent Client Protocol](https://agentclientprotocol.com). Upstream it **is** an ACP agent (`tigercat acp`), so hosts such as cc-connect or Zed can drive it. Downstream it is an ACP client that launches Workers on any registered ACP runtime. Feishu and DingTalk stay in those hosts; TigerCat does not implement IM channels.
+TigerCat connects coding agents through the Agent Client Protocol. Start the native Feishu channel with `tigercat feishu connect`, or expose `tigercat acp` to an ACP host such as cc-connect or Zed.
 
 It is not a subagent tool. A resident Router only routes and talks to the human. Workers own one task each, subscribe to Threads, and report back to the Router.
 
@@ -23,15 +23,29 @@ This repository is a week-1 feasibility skeleton. It is not a completed M0. Real
 
 Requires Node.js 22.13 or newer.
 
+Install TigerCat, then start the Feishu bot from your project directory. Requires Node.js 22.13+ and an installed, authenticated coding agent.
+
 ```bash
-npm install
+npm ci
 npm run build
 npm link
+```
 
-tigercat runtime list
-tigercat runtime discover
-tigercat runtime test claude-code
-tigercat runtime test codex
+```bash
+cd /absolute/path/to/your-project
+tigercat feishu connect
+```
+
+Open the official Feishu authorization link printed in the terminal. Keep this process running. Select a runtime explicitly when needed.
+
+```bash
+tigercat feishu connect --cwd /absolute/path/to/your-project --runtime codex
+```
+
+Add the bot to a group and allow its Chat ID to enable group mentions.
+
+```bash
+TIGERCAT_FEISHU_ALLOWED_CHATS=oc_your_chat_id tigercat feishu connect
 ```
 
 `claude-code` and `codex` are built in. `runtime test` runs `initialize`, `session/new`, and `session/prompt`.
@@ -40,10 +54,27 @@ With no `claude` or `codex` binary, and with `TIGERCAT_RUNTIME_LIVE` unset, that
 
 A real run, once the binary is installed:
 
+### Additional built-in runtimes
+
+Install and authenticate the selected vendor CLI. DeepSeek Harness, Kimi Code and TRAE use native ACP. Pi and ZCode use pinned community adapters downloaded through npx on first launch. ZCode runs in build mode with ACP permission requests. Vendor sessions still require live verification.
+
+| Runtime ID | ACP command or adapter | Vendor CLI path override |
+|---|---|---|
+| `deepseek-harness` | `dsh --profile acp` | `TIGERCAT_DEEPSEEK_HARNESS_BIN` |
+| `pi` | `pi-acp@0.0.35` | `TIGERCAT_PI_BIN` |
+| `zcode` | `zcode-acp-server@0.96.0` | `TIGERCAT_ZCODE_BIN` |
+| `kimicode` | `kimi acp` | `TIGERCAT_KIMICODE_BIN` |
+| `trae` | `traecli acp serve` | `TIGERCAT_TRAE_BIN` |
+
 ```bash
 tigercat runtime discover --json
 tigercat runtime test claude-code
 tigercat runtime test codex
+tigercat runtime test deepseek-harness
+tigercat runtime test pi
+tigercat runtime test zcode
+tigercat runtime test kimicode
+tigercat runtime test trae
 ```
 
 `TIGERCAT_CLAUDE_BIN` is forwarded as `CLAUDE_CODE_EXECUTABLE`. `TIGERCAT_CODEX_BIN` is forwarded as `CODEX_PATH`. Claude Code uses an existing `claude` login or `ANTHROPIC_API_KEY`. Codex uses `CODEX_API_KEY` or `OPENAI_API_KEY`. On a headless machine set `NO_BROWSER=1` so Codex does not open a ChatGPT login.

@@ -7,7 +7,7 @@
 
 コーディングエージェント向けの Super-agent ルーターです。常駐する一つの ACP ルーターが、作業を Claude Code、Codex、または任意の ACP agent へ振り分けます。
 
-TigerCat は [Agent Client Protocol](https://agentclientprotocol.com) の上に載っています。上流から見ると、これ**そのもの**が ACP agent です（`tigercat acp`）。そのため cc-connect や Zed のようなホストがこれを駆動できます。下流では ACP クライアントであり、登録済みのどの ACP runtime 上でも Worker を起動します。Feishu と DingTalk はそれらのホスト側に残り、TigerCat は IM チャンネルを実装しません。
+TigerCat は Agent Client Protocol でコーディング Agent を接続します。`tigercat feishu connect` で飛書チャネルを起動するか、`tigercat acp` を cc-connect や Zed などの ACP ホストに接続できます。
 
 これは subagent ツールではありません。常駐する Router はルーティングと、人との対話だけを行います。Worker はタスクを一つずつ受け持ち、Thread を購読し、Router に結果を返します。
 
@@ -23,15 +23,29 @@ TigerCat は [Agent Client Protocol](https://agentclientprotocol.com) の上に�
 
 Node.js 22.13 以降が必要です。
 
+TigerCat をインストールし、プロジェクトのディレクトリから飛書ボットを起動します。Node.js 22.13 以上と、インストール・認証済みのコーディング Agent が必要です。
+
 ```bash
-npm install
+npm ci
 npm run build
 npm link
+```
 
-tigercat runtime list
-tigercat runtime discover
-tigercat runtime test claude-code
-tigercat runtime test codex
+```bash
+cd /absolute/path/to/your-project
+tigercat feishu connect
+```
+
+端末に表示される飛書の公式認証リンクを開き、プロセスを起動したままにします。必要に応じてランタイムを指定します。
+
+```bash
+tigercat feishu connect --cwd /absolute/path/to/your-project --runtime codex
+```
+
+ボットをグループに追加し、グループの Chat ID を許可するとメンションで利用できます。
+
+```bash
+TIGERCAT_FEISHU_ALLOWED_CHATS=oc_your_chat_id tigercat feishu connect
 ```
 
 `claude-code` と `codex` は組み込みです。`runtime test` は `initialize`、`session/new`、`session/prompt` を実行します。
@@ -40,10 +54,27 @@ tigercat runtime test codex
 
 バイナリを入れたあと、実際に動かすコマンドは次のとおりです。
 
+### 追加の組み込みランタイム
+
+選択した製品の CLI をインストールして認証します。DeepSeek Harness、Kimi Code、TRAE はネイティブ ACP を使用します。Pi と ZCode は初回起動時に npx で固定バージョンのコミュニティアダプターを取得します。ZCode は ACP 権限要求を有効にする build モードで起動します。実際の製品とのセッション検証は未実施です。
+
+| ランタイム ID | ACP コマンドまたはアダプター | CLI パスの指定 |
+|---|---|---|
+| `deepseek-harness` | `dsh --profile acp` | `TIGERCAT_DEEPSEEK_HARNESS_BIN` |
+| `pi` | `pi-acp@0.0.35` | `TIGERCAT_PI_BIN` |
+| `zcode` | `zcode-acp-server@0.96.0` | `TIGERCAT_ZCODE_BIN` |
+| `kimicode` | `kimi acp` | `TIGERCAT_KIMICODE_BIN` |
+| `trae` | `traecli acp serve` | `TIGERCAT_TRAE_BIN` |
+
 ```bash
 tigercat runtime discover --json
 tigercat runtime test claude-code
 tigercat runtime test codex
+tigercat runtime test deepseek-harness
+tigercat runtime test pi
+tigercat runtime test zcode
+tigercat runtime test kimicode
+tigercat runtime test trae
 ```
 
 `TIGERCAT_CLAUDE_BIN` は `CLAUDE_CODE_EXECUTABLE` として渡されます。`TIGERCAT_CODEX_BIN` は `CODEX_PATH` として渡されます。Claude Code は既存の `claude` ログイン、または `ANTHROPIC_API_KEY` を使います。Codex は `CODEX_API_KEY` または `OPENAI_API_KEY` を使います。画面の無いマシンでは `NO_BROWSER=1` を設定し、Codex が ChatGPT のログイン画面を開かないようにします。

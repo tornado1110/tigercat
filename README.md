@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
 
-**在飞书里 @ 一下，让 Claude Code / Codex 接手代码任务。**
+**在飞书里 @ 一下，让 Claude Code、Codex、DeepSeek Harness、Pi、ZCode、Kimi Code 或 TRAE 接手代码任务。**
 
 把“这个报错谁看一下”发进群，把“帮我改一下”发给机器人。TigerCat 把飞书消息交给你本机的编程 Agent，在指定仓库里处理任务，再把结果回到聊天里。
 
@@ -31,11 +31,11 @@
 - **私聊交办，群里协作**。授权用户可私聊机器人，在已授权的群里 @ 它发起任务。
 - **边做边补充**。支持 ACP steering 的运行时会把后续消息并入当前轮。
 - **结果回到飞书**。消息表情显示处理状态，Markdown 卡片回复执行结果，并标注工作区和运行时。
-- **接上你已有的 Agent**。内置 Claude Code 和 Codex 运行时，也支持注册其他 ACP Worker。
+- **接上你已有的 Agent**。内置七种运行时，支持 DeepSeek Harness、Pi、ZCode、Kimi Code、TRAE、Claude Code 和 Codex，也支持注册其他 ACP Worker。
 
 ## 快速开始
 
-准备 Node.js 22.13 或更高版本，以及已安装、已配置凭据的 Codex 或 Claude Code。
+准备 Node.js 22.13 或更高版本，以及已安装、已配置凭据的任一种内置编程 Agent，安装与凭据说明见下方「独立运行时」。
 
 ### 1. 安装 TigerCat
 
@@ -58,7 +58,7 @@ tigercat feishu connect
 
 打开终端输出的飞书官方授权链接，确认创建 TigerCat 机器人。看到 `Feishu WebSocket connected.` 后，打开终端里的机器人私聊链接，发出第一条任务。
 
-保持这个终端进程运行。下次执行同一命令会复用绑定，每个进程绑定一个项目目录。首次接入优先使用已配置的默认 Worker，否则自动发现本机的 Codex 或 Claude Code，优先选择 Codex。
+保持这个终端进程运行。下次执行同一命令会复用绑定，每个进程绑定一个项目目录。首次接入优先使用已配置的默认 Worker，否则自动发现本机已安装的内置 Agent，优先选择 Codex。
 
 也可以显式指定项目与运行时。
 
@@ -93,7 +93,7 @@ TigerCat 基于 [Agent Client Protocol](https://agentclientprotocol.com)。独�
 
 插件模式下，当前 Codex 会话的原生 Shell、编辑和写文件工具由 Codex 控制。TigerCat 的 MCP 服务注册自己的工具，不能检查或移除 Codex 的原生工具。这些工具仍在 Router 的有效工具集里时，插件进程拒绝启动，也不会退到更松的权限模式。这不是工具隔离，M0 也没有通过。TigerCat 的 Skill 引导主会话把实现交给 Worker。Worker 权限策略约束 TigerCat 启动的 Worker，主会话直接调用工具时遵循 Codex 宿主设置。
 
-当前处于可行性验证阶段。CI 使用 stdio stub 覆盖 `claude-code` 和 `codex` 两个 profile。待完成的验证包括真实 Claude Code / Codex 会话、飞书端到端往返、真实模型 Router，以及厂商 harness 的工具隔离。跨频道和共享 PR 接入列入后续里程碑。真实二进制的手动验证命令见下文。
+当前处于可行性验证阶段。CI 使用 stdio stub 覆盖七种内置运行时的发现、启动与 ACP 会话。待完成的验证包括真实厂商会话、飞书端到端往返、真实模型 Router，以及厂商 harness 的工具隔离。跨频道和共享 PR 接入列入后续里程碑。真实二进制的手动验证命令见下文。
 
 </details>
 
@@ -115,42 +115,64 @@ MCP 连接关闭时会清理 Worker。默认每个插件进程有隔离的临时
 
 ## 独立运行时
 
-`claude-code` 和 `codex` 是内置的。`runtime discover`（`runtime list --json` 也会显示同样的字段）会从当前进程的 `PATH` 自动找到本机 `claude`、`codex`，并报告绝对路径；显式的 `TIGERCAT_CLAUDE_BIN`、`TIGERCAT_CODEX_BIN` 优先。`runtime test` 会执行 `initialize`、`session/new` 和 `session/prompt`。
+内置七种运行时。`runtime discover` 和 `runtime list --json` 会报告本机厂商 CLI 的绝对路径。显式的路径环境变量优先于 `PATH`。
 
-如果没有 `claude` 或 `codex` 二进制，并且没有设置 `TIGERCAT_RUNTIME_LIVE`，这次测试会与本地的 dry-run agent 完成握手。报告中为 `mode: "dry-run"` 和 `vendorExecuted: false`。Claude Code 和 Codex 不会启动，也不会读取 API key。
+| 运行时 ID | 产品 | ACP 启动方式 | 厂商 CLI 路径变量 |
+|---|---|---|---|
+| `claude-code` | Claude Code | `@agentclientprotocol/claude-agent-acp@0.108.0` | `TIGERCAT_CLAUDE_BIN` |
+| `codex` | Codex | `@agentclientprotocol/codex-acp@2.7.0` | `TIGERCAT_CODEX_BIN` |
+| `deepseek-harness` | DeepSeek Harness | `dsh --profile acp` | `TIGERCAT_DEEPSEEK_HARNESS_BIN` |
+| `pi` | Pi | `pi-acp@0.0.35` → `pi --mode rpc` | `TIGERCAT_PI_BIN` |
+| `zcode` | ZCode | `zcode-acp-server@0.96.0` → `zcode` | `TIGERCAT_ZCODE_BIN` |
+| `kimicode` | Kimi Code | `kimi acp` | `TIGERCAT_KIMICODE_BIN` |
+| `trae` | TRAE | `traecli acp serve` | `TIGERCAT_TRAE_BIN` |
 
-发现本地二进制后，真实跑法如下；不需要再手工填路径：
+先安装所选产品的 CLI，并完成登录或配置凭据。Pi 使用 `npm install -g @earendil-works/pi-coding-agent` 安装。ZCode 可以使用桌面应用随附的 CLI，将 `TIGERCAT_ZCODE_BIN` 指向其 `.cjs` 文件。DeepSeek Harness、Kimi Code 和 TRAE 的安装及 ACP 说明见各自文档。[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) · [Pi ACP](https://github.com/svkozak/pi-acp) · [ZCode ACP](https://github.com/william0wang/zcode-acp) · [Kimi Code](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-acp) · [TRAE CLI](https://docs.trae.cn/cli_agent-client-protocol)
+
+`runtime test` 执行 `initialize`、`session/new` 和 `session/prompt`。发现厂商 CLI 或设置独立 ACP 可执行文件后会启动真实进程，并可能调用模型。缺少 CLI 且未设置 `TIGERCAT_RUNTIME_LIVE=1` 时，测试报告为 `mode: "dry-run"`、`vendorExecuted: false`。
 
 ```bash
 tigercat runtime discover --json
 tigercat runtime test claude-code
 tigercat runtime test codex
+tigercat runtime test deepseek-harness
+tigercat runtime test pi
+tigercat runtime test zcode
+tigercat runtime test kimicode
+tigercat runtime test trae
 ```
 
-`TIGERCAT_CLAUDE_BIN` 会作为 `CLAUDE_CODE_EXECUTABLE` 往下传。`TIGERCAT_CODEX_BIN` 会作为 `CODEX_PATH` 往下传。Claude Code 使用已有的 `claude` 登录，或 `ANTHROPIC_API_KEY`。Codex 使用 `CODEX_API_KEY` 或 `OPENAI_API_KEY`。在没有图形界面的机器上设置 `NO_BROWSER=1`，避免 Codex 打开 ChatGPT 登录页。
+通过 `tigercat feishu connect --runtime <运行时 ID>` 为飞书选择内核，例如 `tigercat feishu connect --runtime kimicode`。七种运行时也可用于插件 Worker 和 `coordinator_runtime`，同名的 `runtime add` 配置会覆盖内置项。
 
-Worker 不会继承 Router、插件或频道令牌；宿主环境里的其他密钥形状变量也会被过滤。自定义 runtime 需要的凭据请放在它自己的 `env` 中（配置文件会明文保存），内置 Worker 的文档变量会自动保留。
+| 运行时 | 自动保留的凭据环境变量 |
+|---|---|
+| `claude-code` | `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`，或本机登录 |
+| `codex` | `CODEX_API_KEY`、`OPENAI_API_KEY`，或本机登录及所选 provider 的 `env_key` |
+| `deepseek-harness` | `DEEPSEEK_API_KEY` |
+| `pi` | `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`DEEPSEEK_API_KEY`，或本机登录 |
+| `zcode` | 使用本机 ZCode 登录与配置 |
+| `kimicode` | `KIMI_API_KEY`、`KIMI_MODEL_API_KEY`、`KIMI_WEB_SEARCH_API_KEY`，或本机登录 |
+| `trae` | `TRAECLI_PERSONAL_ACCESS_TOKEN`，或本机登录 |
 
-这些 adapter 已随项目依赖和 Codex 插件 bundle 固定。厂商二进制不在 `PATH` 上时，`TIGERCAT_RUNTIME_LIVE=1` 会启动本地 adapter。这会与厂商通信，因此需要凭据：
+Worker 按所选内核保留上表凭据。额外的提供方密钥可通过自定义 runtime 的 `env` 配置传入，该配置会明文保存。`TIGERCAT_CLAUDE_BIN` 和 `TIGERCAT_CODEX_BIN` 分别下传为 `CLAUDE_CODE_EXECUTABLE` 和 `CODEX_PATH`。Pi 和 ZCode 的路径分别下传为 `PI_ACP_PI_COMMAND` 和 `ZCODE_BIN`。无图形界面的 Codex 可设置 `NO_BROWSER=1`。
+
+Claude Code 和 Codex 的 adapter 随项目依赖及插件 bundle 固定。Pi 和 ZCode 的社区 adapter 在首次启动时通过 `npx` 下载固定版本，需要网络和 npm。已有本地项目依赖时优先使用该依赖。Claude Code、Codex 的版本固定于 2026-11-18，Pi、ZCode 的版本固定于 2026-11-27。
+
+可用 `TIGERCAT_RUNTIME_LIVE=1` 强制测试真实启动路径，所选产品仍需满足其 CLI 和凭据要求。
 
 ```bash
 TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test claude-code
 TIGERCAT_RUNTIME_LIVE=1 tigercat runtime test codex
 ```
 
-| 运行时 | 包 | 版本 | 可执行文件 |
-|---|---|---|---|
-| `claude-code` | `@agentclientprotocol/claude-agent-acp` | 0.108.0 | `claude-agent-acp` |
-| `codex` | `@agentclientprotocol/codex-acp` | 2.7.0 | `codex-acp` |
+Claude Code 使用 `CLAUDE_AGENT_ACP_PROTOCOL=v1`。ZCode 使用 `ZCODE_ACP_MODE=build`，由 TigerCat 的权限策略处理 ACP 审批。七种内核默认 `permission = "ask"`，飞书渠道的交互权限行为见渠道文档。
 
-这些版本号是 2026-11-18 从 npm registry 钉住的。`claude-code` 启动时带上 `CLAUDE_AGENT_ACP_PROTOCOL=v1`，让会话留在本客户端所实现的稳定 v1 生命周期上（`session/new`、`session/prompt`、`session/cancel`）。如果你已经装好 adapter，它会代替 `npx`：
+已经安装独立 ACP 可执行文件时，可通过 `TIGERCAT_CLAUDE_CODE_ACP`、`TIGERCAT_CODEX_ACP`、`TIGERCAT_DEEPSEEK_HARNESS_ACP`、`TIGERCAT_PI_ACP`、`TIGERCAT_ZCODE_ACP`、`TIGERCAT_KIMICODE_ACP`、`TIGERCAT_TRAE_ACP` 指定完整路径。这些入口会直接启动，所需子命令应写在包装脚本中。
 
 ```bash
 TIGERCAT_CLAUDE_CODE_ACP=/usr/local/bin/claude-agent-acp tigercat runtime test claude-code
 TIGERCAT_CODEX_ACP=/usr/local/bin/codex-acp tigercat runtime test codex
 ```
-
-同名的 `runtime add` 会覆盖内置项。这两个名字都可以当作 `coordinator_runtime`。Router 的工具列表仍然只有 spawn、list、send、read、interrupt、wait、kill、subscribe 和 unsubscribe。
 
 `coordinator_runtime` 指的是你自己安装的 ACP agent。本仓库不附带那个程序。这个字段留空，才会继续用脚本化 brain；见 [docs/operations.md](docs/operations.md)。准入策略文件是 `examples/rules.default.toml`，当前版本为 `2026-11-19.1`。整句都是明确的闲聊（`thanks`、`lol`、`morning`，以及该文件里的日语、韩语、西班牙语确认语）时，结果为 `ignore`，Router 调用次数为零。当没有人订阅时，`Morning all` 或 `coffee break` 这类未知自然语言是 `candidate`；在已经订阅的 Thread 上做澄清，则是对该 Worker 的 `respond`。`candidate` 不会被改写成 `ignore`。触发文本做 NFKC。规则里的字面量同样折叠，折叠产生的正则元字符会转义，因此全角标点仍是字面量；反斜杠后面的非 ASCII 字符也并入这段字面量，所以 `\＊` 命中 `*`。匹配始终不区分大小写，重音保留：未列出的 `adios` 不会命中 `adiós`。字符类里的单个码位不能折叠成多个码位，否则 `loadConfig` 报出带规则名的错误，服务在规则改好之前不会启动。日文和韩文按子串匹配，拉丁文用 Unicode 字母边界 `(?<![\p{L}\p{N}])…(?![\p{L}\p{N}])`（规则自己带 `u` 标志，不用 `\b`）。句子里还夹着任务时，这条规则不忽略。
 

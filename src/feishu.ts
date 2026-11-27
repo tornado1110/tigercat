@@ -5,6 +5,7 @@ import { configPath } from "./config.js";
 import { bindingFile, loadOrRegisterFeishu } from "./feishu-binding.js";
 import type { EventHandles, Logger } from "@larksuiteoapi/node-sdk";
 import { TigerError } from "./errors.js";
+import { builtinByName } from "./builtins.js";
 import { serveImChannel, type ImChannelHostOptions, type ImMessage } from "./im-channel.js";
 
 import type { ReplyIdentity } from "./store.js";
@@ -59,7 +60,7 @@ export function parseFeishuMessage(event: MessageEvent, access: FeishuAccess): I
 export function feishuReplyCard(text: string, identity?: ReplyIdentity): string {
   const elements: object[] = [{ tag: "markdown", content: text }];
   if (identity) {
-    const runtime = identity.runtime === "codex" ? "Codex" : identity.runtime === "claude-code" ? "Claude Code" : identity.runtime;
+    const runtime = builtinByName(identity.runtime)?.product ?? identity.runtime;
     const labels = [identity.workspace && `工作区 ${identity.workspace}`, runtime, identity.model, identity.effort]
       .filter((label): label is string => Boolean(label)).map((label) => label.replace(/\s+/g, " ").trim().slice(0, 80));
     elements.push({ tag: "div", text: { tag: "plain_text", content: labels.join(" · "), text_size: "notation", text_color: "grey" } });

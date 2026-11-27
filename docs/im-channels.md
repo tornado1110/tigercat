@@ -8,7 +8,7 @@
 2. 出现 `Feishu WebSocket connected.` 后，打开终端里的机器人私聊链接。默认允许创建者发消息，群聊可以通过下表的群白名单启用。
 3. 保持渠道进程运行。下次用相同的 TigerCat 配置启动会复用绑定。应用凭据保存在用户目录下的 `~/.tigercat/bindings/feishu.sqlite`。如果飞书没有返回创建者身份，可通过 `TIGERCAT_FEISHU_ALLOWED_USERS` 显式指定。
 
-`--cwd` 指定仓库，`--runtime` 指定 Worker。首次接入时优先使用已配置的默认 Worker，否则自动发现本机的 Codex 或 Claude Code，优先使用 Codex。飞书文本渠道对需要交互确认的权限请求采用 deny。已明确配置的 auto 策略继续生效。
+`--cwd` 指定仓库，`--runtime` 指定 Worker。首次接入时优先使用已配置的默认 Worker，否则自动发现本机的七种内置 Agent，优先使用 Codex。可选 ID 为 `claude-code`、`codex`、`deepseek-harness`、`pi`、`zcode`、`kimicode`、`trae`，例如 `tigercat feishu connect --runtime kimicode`。各内核的 CLI 安装、路径变量与凭据见 [README](../README.md#独立运行时)。飞书文本渠道对需要交互确认的权限请求采用 deny。已明确配置的 auto 策略继续生效。
 
 ## 使用已有的飞书应用
 

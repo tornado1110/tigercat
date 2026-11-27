@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { BUILTIN_RUNTIMES, resolveRuntime } from "../../src/builtins.js";
 import { main } from "../../src/cli.js";
 import { SystemClock } from "../../src/clock.js";
 import { defaultConfig, saveConfig } from "../../src/config.js";
@@ -14,6 +15,7 @@ import { waitForEvent } from "../harness/stdio-engine.js";
 const roots: string[] = [];
 const scrubbed = [
   "TIGERCAT_RUNTIME_LIVE",
+  ...BUILTIN_RUNTIMES.flatMap((spec) => [...spec.vendorEnv, spec.adapterEnv]),
   "TIGERCAT_CLAUDE_BIN",
   "TIGERCAT_CODEX_BIN",
   "TIGERCAT_CLAUDE_CODE_ACP",
@@ -136,6 +138,56 @@ describe("claude-code and codex profiles", () => {
     expect(codex.OPENAI_API_KEY).toBe("openai-key");
   });
 
+  it.each([
+    ["deepseek-harness", ["DEEPSEEK_API_KEY"]],
+    ["pi", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"]],
+    ["zcode", []],
+    ["kimicode", ["KIMI_API_KEY", "KIMI_MODEL_API_KEY", "KIMI_WEB_SEARCH_API_KEY"]],
+    ["trae", ["TRAECLI_PERSONAL_ACCESS_TOKEN"]],
+  ] as const)("inherits only %s credentials", (name, allowed) => {
+    const keys = ["DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "KIMI_API_KEY", "KIMI_MODEL_API_KEY", "KIMI_WEB_SEARCH_API_KEY", "TRAECLI_PERSONAL_ACCESS_TOKEN", "TIGERCAT_FEISHU_APP_SECRET", "UNRELATED_TOKEN"];
+    const parent = Object.fromEntries(keys.map((key) => [key, `value-${key}`]));
+    const env = buildWorkerEnvironment({}, parent, name);
+    for (const key of keys) {
+      expect(env[key]).toBe((allowed as readonly string[]).includes(key) ? parent[key] : undefined);
+    }
+  });
+
+  it.each(BUILTIN_RUNTIMES.slice(2))("runs $name through its built-in launch path", async (spec) => {
+    const root = mkdtempSync(path.join(tmpdir(), "tigercat-native-acp-"));
+    roots.push(root);
+    const argvFile = path.join(root, "argv.json");
+    const script = path.join(root, "server.cjs");
+    writeFileSync(script, [
+      "#!/usr/bin/env node",
+      `require("node:fs").writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));`,
+      `void import(require("node:url").pathToFileURL(${JSON.stringify(path.resolve("test/stub-agent.ts"))}).href);`,
+    ].join("\n"));
+    chmodSync(script, 0o755);
+    let executable = script;
+    if (process.platform === "win32") {
+      executable = path.join(root, "server.cmd");
+      writeFileSync(executable, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+    }
+    const override = spec.nativeArgs ? spec.vendorEnv[0]! : spec.adapterEnv;
+    const runtime = resolveRuntime(defaultConfig(), spec.name, { PATH: "", [override]: executable });
+    const factory = new ProcessRuntimeFactory({ handshakeTimeoutMs: 8_000 });
+    const handle = await factory.launch(runtime, {
+      cwd: root,
+      role: "worker",
+      onUpdate: () => undefined,
+      onPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+    });
+    try {
+      const result = await handle.prompt("ping");
+      expect(result.stopReason).toBe("end_turn");
+      expect(JSON.parse(readFileSync(argvFile, "utf8"))).toEqual(spec.nativeArgs ?? []);
+      expect(handle.acpSessionId).toBeTruthy();
+    } finally {
+      await handle.kill();
+    }
+  });
+
   it("sends the same prompt to both stub-backed profiles and reads the result", async () => {
     const prompt = "task: add a --json flag to tigercat list";
     const harness = await startProfiles([profile("claude-code"), profile("codex")]);
@@ -218,7 +270,32 @@ describe("claude-code and codex profiles", () => {
 });
 
 describe("tigercat runtime list and test", () => {
-  it("lists the built-ins and dry-runs both handshakes", async () => {
+  it("cleans up the runtime when a vendor rejects the test prompt", async () => {
+    const kill = vi.fn(async () => undefined);
+    const launch = vi.spyOn(ProcessRuntimeFactory.prototype, "launch").mockResolvedValue({
+      pid: undefined,
+      acpSessionId: "rejected-session",
+      prompt: async () => { throw new Error("provider credentials missing"); },
+      cancel: async () => undefined,
+      kill,
+    });
+    const root = mkdtempSync(path.join(tmpdir(), "tigercat-cli-failure-"));
+    roots.push(root);
+    try {
+      let output = "";
+      const code = await main(["runtime", "test", "deepseek-harness", "--config", path.join(root, "missing.toml")], {
+        stdout: (text) => { output += text; },
+        stderr: () => undefined,
+      });
+      expect(code).toBe(1);
+      expect(JSON.parse(output)).toMatchObject({ ok: false, message: expect.stringContaining("provider credentials missing") });
+      expect(kill).toHaveBeenCalledOnce();
+    } finally {
+      launch.mockRestore();
+    }
+  });
+
+  it("lists the built-ins and dry-runs all handshakes", async () => {
     const restore = scrubEnv();
     const root = mkdtempSync(path.join(tmpdir(), "tigercat-cli-"));
     roots.push(root);
@@ -233,12 +310,12 @@ describe("tigercat runtime list and test", () => {
       });
       expect(listCode).toBe(0);
       const runtimes = JSON.parse(listed) as Array<{ name: string; testMode?: string; adapter?: { version: string } }>;
-      expect(runtimes.map((runtime) => runtime.name)).toEqual(["claude-code", "codex"]);
+      expect(runtimes.map((runtime) => runtime.name)).toEqual(["claude-code", "codex", "deepseek-harness", "pi", "zcode", "kimicode", "trae"]);
       expect(runtimes.every((runtime) => runtime.testMode === "dry-run")).toBe(true);
       expect(runtimes[0]?.adapter?.version).toBe("0.108.0");
       expect(runtimes[1]?.adapter?.version).toBe("2.7.0");
 
-      for (const name of ["claude-code", "codex"]) {
+      for (const { name } of BUILTIN_RUNTIMES) {
         let out = "";
         const code = await main(["runtime", "test", name, "--config", config], {
           stdout: (text) => {

@@ -241,7 +241,7 @@ export async function serveImChannel(options: ImChannelHostOptions, adapter: ImA
   if (adapter.localWorkerDefault && !options.runtime && runtime === "worker" && !config.runtimes.some((r) => r.name === runtime)) {
     const available = discoverRuntimes(config).filter((r) => r.builtin && r.vendorFound);
     const selected = available.find((r) => r.name === "codex") ?? available[0];
-    if (!selected) throw new TigerError("unknown_runtime", "请安装 Codex 或 Claude Code，或通过 --runtime 指定 ACP Worker。");
+    if (!selected) throw new TigerError("unknown_runtime", "请安装支持的编程 Agent（运行 tigercat runtime list 查看），或通过 --runtime 指定 ACP Worker。");
     runtime = selected.name;
   }
   if (adapter.localWorkerDefault) {

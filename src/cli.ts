@@ -19,7 +19,7 @@ import { servePlugin } from "./plugin.js";
 import { listenForTools } from "./ipc.js";
 import { discoverRuntimes, listRuntimes, planRuntimeTest, type ListedRuntime, type RuntimeTestPlan } from "./builtins.js";
 import { redactText } from "./redact.js";
-import { ProcessRuntimeFactory } from "./runtime.js";
+import { ProcessRuntimeFactory, type RuntimeHandle } from "./runtime.js";
 import { chatRouterFromConfig } from "./router-llm.js";
 import { SqliteStore } from "./store.js";
 import type { PermissionPolicy, RuntimeConfig } from "./types.js";
@@ -272,6 +272,8 @@ async function cmdRuntime(
 
 async function testRuntime(plan: RuntimeTestPlan): Promise<Record<string, unknown>> {
   const factory = new ProcessRuntimeFactory({ handshakeTimeoutMs: 8_000 });
+  let handle: RuntimeHandle | undefined;
+  let timeout: NodeJS.Timeout | undefined;
   const base = {
     runtime: plan.runtime.name,
     mode: plan.mode,
@@ -281,7 +283,7 @@ async function testRuntime(plan: RuntimeTestPlan): Promise<Record<string, unknow
     manual: plan.manual || undefined,
   };
   try {
-    const handle = await factory.launch(plan.launch, {
+    handle = await factory.launch(plan.launch, {
       cwd: process.cwd(),
       role: "worker",
       onUpdate: () => undefined,
@@ -294,9 +296,10 @@ async function testRuntime(plan: RuntimeTestPlan): Promise<Record<string, unknow
     });
     const result = await Promise.race([
       handle.prompt("ping"),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new TigerError("timeout", "prompt timed out")), 8_000)),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new TigerError("timeout", "prompt timed out")), 8_000);
+      }),
     ]);
-    await handle.kill();
     const vendorExecuted = plan.mode === "adapter";
     return {
       ...base,
@@ -308,7 +311,7 @@ async function testRuntime(plan: RuntimeTestPlan): Promise<Record<string, unknow
       vendorExecuted,
       preview: plan.mode === "dry-run" ? result.text.slice(0, 200) : undefined,
       message: vendorExecuted
-        ? `${plan.adapter?.package}@${plan.adapter?.version} completed initialize, session/new, and session/prompt.`
+        ? `${plan.adapter ? `${plan.adapter.package}@${plan.adapter.version}` : plan.runtime.name} completed initialize, session/new, and session/prompt.`
         : plan.message,
     };
   } catch (error) {
@@ -319,6 +322,9 @@ async function testRuntime(plan: RuntimeTestPlan): Promise<Record<string, unknow
       reason: isTigerError(error) ? error.code : "bad_runtime",
       message: plan.mode === "dry-run" ? `${message} ${plan.message}` : message,
     };
+  } finally {
+    clearTimeout(timeout);
+    await handle?.kill();
   }
 }
 
@@ -459,14 +465,14 @@ Usage:
   tigercat runtime add <name> --command <cmd> [--arg a] [--env K=V] [--tag t] [--permission ask|auto|deny]
     --env is written to config.toml in plaintext. Do not put API keys there.
   tigercat runtime list
-  tigercat runtime discover   # probe local Claude Code and Codex binaries
+  tigercat runtime discover   # probe local coding agent binaries
   tigercat runtime remove <name>
   tigercat runtime test <name>
   tigercat spawn --runtime <name> --thread <id> <task>
   tigercat list|send|read|interrupt|wait|kill|resume|subscribe|unsubscribe
 
-Built-in workers: claude-code, codex.
-When claude or codex is absent, runtime test handshakes a local dry-run agent.
+Built-in workers: claude-code, codex, deepseek-harness, pi, zcode, kimicode, trae.
+When the vendor CLI is absent, runtime test handshakes a local dry-run agent.
 Real run: TIGERCAT_CLAUDE_BIN=/path/to/claude tigercat runtime test claude-code
           TIGERCAT_CODEX_BIN=/path/to/codex tigercat runtime test codex
 

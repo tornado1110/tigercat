@@ -19,28 +19,38 @@ export const CLAUDE_AGENT_ACP_VERSION = "0.108.0";
 export const CODEX_ACP_PACKAGE = "@agentclientprotocol/codex-acp";
 export const CODEX_ACP_VERSION = "2.7.0";
 
-export interface AdapterSpec {
-  name: "claude-code" | "codex";
+interface BuiltinSpec {
+  name: "claude-code" | "codex" | "deepseek-harness" | "pi" | "zcode" | "kimicode" | "trae";
   product: string;
   description: string;
   tags: string[];
   permission: PermissionPolicy;
-  packageName: string;
-  version: string;
-  bin: string;
-  /** Package entry used when the adapter is installed next to TigerCat. */
-  entry: string;
   vendorBinary: string;
   /** Checked first. An explicit path that is missing does not fall through to PATH. */
   vendorEnv: readonly string[];
   /** Absolute path to an adapter executable. When set, `runtime test` launches it. */
   adapterEnv: string;
-  /** Always set on the child so the adapter stays on the v1 session lifecycle this client speaks. */
+  /** Environment applied to the child, including protocol and approval settings. */
   childEnv: Record<string, string>;
   /** Env var the adapter reads when the user points it at an installed vendor binary. */
-  vendorPassthrough: string;
+  vendorPassthrough?: string;
   manual: string;
 }
+
+/** Native ACP CLIs launch directly; packaged adapters bridge vendor protocols. */
+export type AdapterSpec = BuiltinSpec & ({
+  nativeArgs: string[];
+  packageName?: never;
+  version?: never;
+  bin?: never;
+  entry?: never;
+} | {
+  nativeArgs?: never;
+  packageName: string;
+  version: string;
+  bin: string;
+  entry: string;
+});
 
 export const BUILTIN_RUNTIMES: readonly AdapterSpec[] = [
   {
@@ -76,6 +86,80 @@ export const BUILTIN_RUNTIMES: readonly AdapterSpec[] = [
     childEnv: {},
     vendorPassthrough: "CODEX_PATH",
     manual: "TIGERCAT_CODEX_BIN=/path/to/codex tigercat runtime test codex",
+  },
+  {
+    name: "deepseek-harness",
+    product: "DeepSeek Harness",
+    description: "DeepSeek Harness native ACP server (dsh --profile acp).",
+    tags: ["worker"],
+    permission: "ask",
+    nativeArgs: ["--profile", "acp"],
+    vendorBinary: "dsh",
+    vendorEnv: ["TIGERCAT_DEEPSEEK_HARNESS_BIN"],
+    adapterEnv: "TIGERCAT_DEEPSEEK_HARNESS_ACP",
+    childEnv: {},
+    manual: "TIGERCAT_DEEPSEEK_HARNESS_BIN=/path/to/dsh tigercat runtime test deepseek-harness",
+  },
+  {
+    name: "pi",
+    product: "Pi",
+    description: "Community ACP adapter for Pi (pi-acp@0.0.35).",
+    tags: ["worker"],
+    permission: "ask",
+    packageName: "pi-acp",
+    version: "0.0.35",
+    bin: "pi-acp",
+    entry: "dist/index.js",
+    vendorBinary: "pi",
+    vendorEnv: ["TIGERCAT_PI_BIN", "PI_ACP_PI_COMMAND"],
+    adapterEnv: "TIGERCAT_PI_ACP",
+    childEnv: {},
+    vendorPassthrough: "PI_ACP_PI_COMMAND",
+    manual: "TIGERCAT_PI_BIN=/path/to/pi tigercat runtime test pi",
+  },
+  {
+    name: "zcode",
+    product: "ZCode",
+    description: "Community ACP adapter for ZCode (zcode-acp-server@0.96.0).",
+    tags: ["worker"],
+    permission: "ask",
+    packageName: "zcode-acp-server",
+    version: "0.96.0",
+    bin: "zcode-acp-server",
+    entry: "dist/cli.js",
+    vendorBinary: "zcode",
+    vendorEnv: ["TIGERCAT_ZCODE_BIN", "ZCODE_BIN"],
+    adapterEnv: "TIGERCAT_ZCODE_ACP",
+    // The bridge defaults to yolo. Build mode keeps ACP approval requests active.
+    childEnv: { ZCODE_ACP_MODE: "build" },
+    vendorPassthrough: "ZCODE_BIN",
+    manual: "TIGERCAT_ZCODE_BIN=/path/to/zcode tigercat runtime test zcode",
+  },
+  {
+    name: "kimicode",
+    product: "Kimi Code",
+    description: "Kimi Code native ACP server (kimi acp).",
+    tags: ["worker"],
+    permission: "ask",
+    nativeArgs: ["acp"],
+    vendorBinary: "kimi",
+    vendorEnv: ["TIGERCAT_KIMICODE_BIN"],
+    adapterEnv: "TIGERCAT_KIMICODE_ACP",
+    childEnv: {},
+    manual: "TIGERCAT_KIMICODE_BIN=/path/to/kimi tigercat runtime test kimicode",
+  },
+  {
+    name: "trae",
+    product: "TRAE",
+    description: "TRAE CLI native ACP server (traecli acp serve).",
+    tags: ["worker"],
+    permission: "ask",
+    nativeArgs: ["acp", "serve"],
+    vendorBinary: "traecli",
+    vendorEnv: ["TIGERCAT_TRAE_BIN"],
+    adapterEnv: "TIGERCAT_TRAE_ACP",
+    childEnv: {},
+    manual: "TIGERCAT_TRAE_BIN=/path/to/traecli tigercat runtime test trae",
   },
 ];
 
@@ -164,7 +248,7 @@ export function listRuntimes(config: AppConfig, env: NodeJS.ProcessEnv = process
 }
 
 /**
- * Probe the host for the built-in Claude Code and Codex vendor executables.
+ * Probe the host for the built-in vendor executables.
  * The result intentionally reuses the runtime catalog so callers can show
  * both configured overrides and the discovered local adapters in one view.
  */
@@ -210,7 +294,7 @@ export function planRuntimeTest(
     vendorFound: vendor.found,
     adapter: adapterInfo(spec!),
     manual: spec!.manual,
-    message: `Launching ${spec!.packageName}@${spec!.version}.`,
+    message: `Launching ${spec!.product} over ACP.`,
   };
 }
 
@@ -236,10 +320,15 @@ export function launchConfig(spec: AdapterSpec, env: NodeJS.ProcessEnv): Runtime
 function adapterCommand(spec: AdapterSpec, env: NodeJS.ProcessEnv): RuntimeConfig {
   const vendor = findVendor(spec, env);
   const childEnv: Record<string, string> = { ...spec.childEnv };
-  if (vendor.path) childEnv[spec.vendorPassthrough] = vendor.path;
+  if (vendor.path && spec.vendorPassthrough) childEnv[spec.vendorPassthrough] = vendor.path;
   const override = env[spec.adapterEnv];
   if (override && override.trim()) {
-    return runtimeFrom(spec, override.trim(), [], childEnv);
+    const launch = buildDirectCommand(process.platform, env, override.trim(), []);
+    return runtimeFrom(spec, launch.command, launch.args, childEnv, launch.windowsVerbatimArguments);
+  }
+  if (spec.nativeArgs !== undefined) {
+    const launch = buildDirectCommand(process.platform, env, vendor.path ?? spec.vendorBinary, spec.nativeArgs);
+    return runtimeFrom(spec, launch.command, launch.args, childEnv, launch.windowsVerbatimArguments);
   }
   const installed = installedAdapter(spec);
   if (installed) return runtimeFrom(spec, process.execPath, [installed], childEnv);
@@ -291,6 +380,23 @@ export function buildAdapterCommand(
   };
 }
 
+/** Windows npm/pip launchers need cmd.exe when the discovered file is a batch script. */
+export function buildDirectCommand(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  command: string,
+  args: string[],
+): AdapterCommand {
+  if (platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    return {
+      command: env.ComSpec || env.COMSPEC || "cmd.exe",
+      args: ["/d", "/s", "/c", quoteCmdScript([command, ...args])],
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command, args };
+}
+
 function quoteCmdArg(arg: string): string {
   if (arg.length === 0) return '""';
   if (!/[\t\n\r "&|<>^%]/.test(arg)) return arg;
@@ -340,7 +446,7 @@ function findVendor(spec: AdapterSpec, env: NodeJS.ProcessEnv): VendorProbe {
   for (const key of spec.vendorEnv) {
     const value = env[key];
     if (!value) continue;
-    const resolved = resolveExecutable(value, env);
+    const resolved = resolveExecutable(value, env, spec.name === "zcode");
     if (resolved) return { found: true, path: resolved };
     return { found: false, explicitMissing: `${key}=${value}` };
   }
@@ -349,13 +455,13 @@ function findVendor(spec: AdapterSpec, env: NodeJS.ProcessEnv): VendorProbe {
   return { found: false };
 }
 
-function resolveExecutable(value: string, env: NodeJS.ProcessEnv): string | undefined {
+function resolveExecutable(value: string, env: NodeJS.ProcessEnv, allowScript = false): string | undefined {
   if (value.includes("/") || value.includes("\\")) {
     // Resolve relative explicit paths against the discovery process. The
     // runtime Worker may use a different cwd, so passing `./claude` through
     // unchanged would make an otherwise valid discovery fail at launch.
     const candidate = path.resolve(value);
-    return isExecutableFile(candidate) ? candidate : undefined;
+    return isExecutableFile(candidate) || (allowScript && /\.[cm]?js$/i.test(candidate) && isFile(candidate)) ? candidate : undefined;
   }
   return findOnPath(value, env);
 }
@@ -401,6 +507,7 @@ function isFile(file: string): boolean {
 }
 
 function installedAdapter(spec: AdapterSpec): string | undefined {
+  if (spec.nativeArgs !== undefined) return undefined;
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const entry = path.join(root, "node_modules", spec.packageName, spec.entry);
   return isFile(entry) ? entry : undefined;
@@ -425,6 +532,7 @@ function runtimeFrom(
   };
 }
 
-function adapterInfo(spec: AdapterSpec): { package: string; version: string; bin: string } {
+function adapterInfo(spec: AdapterSpec): { package: string; version: string; bin: string } | undefined {
+  if (spec.nativeArgs !== undefined) return undefined;
   return { package: spec.packageName, version: spec.version, bin: spec.bin };
 }

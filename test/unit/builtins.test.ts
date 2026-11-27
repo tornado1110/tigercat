@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  BUILTIN_RUNTIMES,
   buildAdapterCommand,
+  buildDirectCommand,
   builtinByName,
   launchConfig,
   listRuntimes,
@@ -124,11 +126,64 @@ describe("built-in ACP runtimes", () => {
     expect(plan.mode).toBe("command");
     expect(plan.launch.command).toBe(process.execPath);
     const listed = listRuntimes(config, quiet);
-    expect(listed.map((runtime) => runtime.name)).toEqual(["claude-code", "codex"]);
+    expect(listed.map((runtime) => runtime.name)).toEqual(["claude-code", "codex", "deepseek-harness", "pi", "zcode", "kimicode", "trae"]);
     expect(listed[0]?.overridden).toBe(true);
     expect(listed[0]?.command).toBe(process.execPath);
     expect(listed[1]?.builtin).toBe(true);
     expect(listed[1]?.testMode).toBe("dry-run");
+  });
+
+  it.each(BUILTIN_RUNTIMES)("discovers and launches $name using its vendor override", (spec) => {
+    const root = mkdtempSync(path.join(tmpdir(), "tigercat-all-runtimes-"));
+    try {
+      const executable = path.join(root, `${spec.vendorBinary}${process.platform === "win32" ? ".exe" : ""}`);
+      writeFileSync(executable, "#!/bin/sh\n");
+      chmodSync(executable, 0o755);
+      const env = { PATH: "", [spec.vendorEnv[0]!]: executable };
+      const listed = listRuntimes(defaultConfig(), env).find((runtime) => runtime.name === spec.name);
+      expect(listed).toMatchObject({ vendorFound: true, vendorPath: executable, testMode: "adapter" });
+      const plan = planRuntimeTest(defaultConfig(), spec.name, env);
+      expect(plan.mode).toBe("adapter");
+      if (spec.nativeArgs) {
+        expect(plan.adapter).toBeUndefined();
+        expect(plan.launch.command).toBe(executable);
+        expect(plan.launch.args).toEqual(spec.nativeArgs);
+      } else {
+        expect(plan.adapter).toMatchObject({ package: spec.packageName, version: spec.version });
+        expect(plan.launch.env[spec.vendorPassthrough!]).toBe(executable);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(BUILTIN_RUNTIMES)("uses an explicit ACP server for $name", (spec) => {
+    const runtime = resolveRuntime(defaultConfig(), spec.name, { PATH: "", [spec.adapterEnv]: "/custom/acp-server" });
+    expect(runtime.command).toBe("/custom/acp-server");
+    expect(runtime.args).toEqual([]);
+    expect(runtime.permission).toBe("ask");
+  });
+
+  it("passes ZCode's bundled JavaScript CLI to the bridge with approvals enabled", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "tigercat-zcode-"));
+    try {
+      const script = path.join(root, "zcode.cjs");
+      writeFileSync(script, "// desktop entry");
+      const runtime = resolveRuntime(defaultConfig(), "zcode", { PATH: "", ZCODE_BIN: script });
+      expect(runtime.env.ZCODE_BIN).toBe(script);
+      expect(runtime.env.ZCODE_ACP_MODE).toBe("build");
+      expect(planRuntimeTest(defaultConfig(), "zcode", { PATH: "", ZCODE_BIN: script }).mode).toBe("adapter");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("wraps Windows batch launchers and preserves native ACP arguments", () => {
+    const command = buildDirectCommand("win32", {}, "C:\\Program Files\\kimi.cmd", ["acp"]);
+    expect(command.command).toBe("cmd.exe");
+    expect(command.windowsVerbatimArguments).toBe(true);
+    expect(command.args).toEqual(["/d", "/s", "/c", '\"\"C:\\Program Files\\kimi.cmd\" acp\"']);
+    expect(buildDirectCommand("linux", {}, "/bin/kimi", ["acp"])).toEqual({ command: "/bin/kimi", args: ["acp"] });
   });
 
   it("rejects an unknown runtime", () => {
